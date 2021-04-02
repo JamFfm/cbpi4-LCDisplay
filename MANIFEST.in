@@ -1,0 +1,2 @@
+include LCDisplay/config.yaml
+recursive-include LCDisplay/static *
