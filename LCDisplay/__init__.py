@@ -11,11 +11,20 @@ from time import strftime
 from cbpi.api import *
 from cbpi.api.config import ConfigType
 
+# LCDVERSION = '5.0.01'
+#
+# The LCD-library and LCD-driver are taken from RPLCD Project version 1.0. The documentation:
+# http://rplcd.readthedocs.io/en/stable/ very good and readable. Git is here: https://github.com/dbrgn/RPLCD.
+# LCD_Address should be something like 0x27, 0x3f etc.
+# See in Craftbeerpi-UI (webpage of CBPI4) settings .
+# To determine address of LCD use command prompt in Raspi and type in:
+# sudo i2cdetect -y 1 or sudo i2cdetect -y 0
+#
+# Assembled by JamFfm
 
 logger = logging.getLogger(__name__)
-
-# global lcd
-lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1, cols=20, rows=4, dotsize=8, charmap='A00', auto_linebreaks=True, backlight_enabled=True)
+DEBUG = True  # turn True to show (much) more debug info in app.log
+BLINK = False  # start value for blinking the beerglass during heating only for single mode
 
 
 class LCDisplay(CBPiExtension):
@@ -24,7 +33,16 @@ class LCDisplay(CBPiExtension):
         self._task = asyncio.create_task(self.run())
 
     async def run(self):
-        logger.info('Starting LCDisplay background task')
+        logger.info('LCDisplay - Starting background task')
+        address1 = await self.set_lcd_address()
+        address = int(address1, 16)
+        if DEBUG: logger.info('LCDisplay - LCD address %s %s' % (address, address1))
+        charmap = await self.set_lcd_charmap()
+        if DEBUG: logger.info('LCDisplay - LCD charmap: %s' % charmap)
+        global lcd
+        lcd = CharLCD(i2c_expander='PCF8574', address=address, port=1, cols=20, rows=4, dotsize=8, charmap=charmap,
+                      auto_linebreaks=True, backlight_enabled=True)
+        logger.info('LCDisplay - LCD object set')
         while True:
             # this is the main code repeated constantly
             await self.show_standby()
@@ -79,7 +97,15 @@ class LCDisplay(CBPiExtension):
         return ip_addr
 
     async def get_breweryname(self):
+        brewery = self.cbpi.config.get("BREWERY_NAME", None)
+        if brewery is None:
+            brewery = "no name"
+        return brewery
+        pass
+
+    async def get_breweryname1(self):
         # ToDo : find a more generalist way to find the right path for config.json file
+        # just an example to access a json file
         filename = '/home/pi/cbpi4/config/config.json'
         brewery_json_obj = json.loads(open(filename).read())
         brewery = brewery_json_obj['BREWERY_NAME']['value']
@@ -87,44 +113,35 @@ class LCDisplay(CBPiExtension):
         return brewery
         pass
 
-    async def buzzer_gpio(self):
-        global buzzer_gpio
-        buzzer_gpio = self.cbpi.config.get("buzzer_gpio", None)
-        if buzzer_gpio is None:
-            logger.info("INIT Buzzer GPIO")
+    async def set_lcd_address(self):
+        # global lcd_address
+        lcd_address = self.cbpi.config.get("LCD_address", None)
+        if lcd_address is None:
+            logger.info("LCD_Address added")
             try:
-                await self.cbpi.config.add("buzzer_gpio", 5, ConfigType.SELECT, "Buzzer GPIO",
-                                           [{"label": "0", "value": 0},
-                                            {"label": "1", "value": 1},
-                                            {"label": "2", "value": 2},
-                                            {"label": "3", "value": 3},
-                                            {"label": "4", "value": 4},
-                                            {"label": "5", "value": 5},
-                                            {"label": "6", "value": 6},
-                                            {"label": "7", "value": 7},
-                                            {"label": "8", "value": 8},
-                                            {"label": "9", "value": 9},
-                                            {"label": "10", "value": 10},
-                                            {"label": "11", "value": 11},
-                                            {"label": "12", "value": 12},
-                                            {"label": "13", "value": 13},
-                                            {"label": "14", "value": 14},
-                                            {"label": "15", "value": 15},
-                                            {"label": "16", "value": 16},
-                                            {"label": "17", "value": 17},
-                                            {"label": "18", "value": 18},
-                                            {"label": "19", "value": 19},
-                                            {"label": "20", "value": 20},
-                                            {"label": "21", "value": 21},
-                                            {"label": "22", "value": 22},
-                                            {"label": "23", "value": 23},
-                                            {"label": "24", "value": 24},
-                                            {"label": "25", "value": 25},
-                                            {"label": "26", "value": 26},
-                                            {"label": "27", "value": 27}])
-                buzzer_gpio = self.cbpi.config.get("buzzer_gpio", None)
-            except:
+                await self.cbpi.config.add("LCD_address", '0x27', ConfigType.STRING, "LCD address like 0x27 or 0x3f, CBPi reboot required")
+                lcd_address = self.cbpi.config.get("LCD_address", None)
+            except Exception as e:
                 logger.warning('Unable to update config')
+                logger.warning(e)
+            pass
+        pass
+        return lcd_address
+
+    async def set_lcd_charmap(self):
+        lcd_charmap = self.cbpi.config.get("LCD_Charactermap", None)
+        if lcd_charmap is None:
+            logger.info("LCD_Charactermap added")
+            try:
+                await self.cbpi.config.add("LCD_Charactermap", 'A00', ConfigType.SELECT, "LCD Charactermap like A00, "
+                                                                                         "A02, CBPi reboot required", [{"label": "A00", "value": "A00"}, {"label": "A02", "value": "A02"}])
+                lcd_charmap = self.cbpi.config.get("LCD_Charactermap", None)
+            except Exception as e:
+                logger.warning('Unable to update config')
+                logger.warning(e)
+            pass
+        pass
+        return lcd_charmap
 
 
 def setup(cbpi):
