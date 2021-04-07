@@ -21,6 +21,7 @@ setup(name='LCDisplay',
       packages=['LCDisplay'],
 	    install_requires=[
             'cbpi>=4.0.0.33',
+	    'smbus2',
       ],
       long_description=long_description,
       long_description_content_type='text/markdown'
