@@ -184,6 +184,8 @@ class LCDisplay(CBPiExtension):
         try:
             ip_addr = socket.inet_ntoa(
                 fcntl.ioctl(so.fileno(), 0x8915, struct.pack('256s', bytes(interface.encode())[:15]))[20:24])
+        except:
+            return ip_addr
         finally:
             pass
         return ip_addr
