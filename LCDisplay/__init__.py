@@ -34,7 +34,9 @@ from cbpi.controller.sensor_controller import SensorController
 # Assembled by JamFfm
 # 02.04.2021
 # 18.04.2021 progress, thanks to avollkopf
-#
+# 28.04.2021 little progress, heater state can be detected, apparently cbpicodec is not necessary to convert umlaute.
+# I leave it because I woluld like to handle the A00 parameter as I am not sure if all versions of LCD can use umlaute.
+# Timer detect is missing :-)
 
 logger = logging.getLogger(__name__)
 DEBUG = True  # turn True to show (much) more debug info in app.log
@@ -153,11 +155,19 @@ class LCDisplay(CBPiExtension):
         logger.info('LCDisplay - LCD unit: °%s' % unit)
 
         single_kettle_id = await self.set_lcd_kettle_for_single_mode()
-        kettle_value = await self.get_kettle_values(single_kettle_id)
         logger.info('LCDisplay - LCD single_kettle_id: %s' % single_kettle_id)
 
         sensor_for_sensor_mode = await self.set_lcd_sensortype_for_sensor_mode()
         logger.info('LCDisplay - LCD sensor_for_sensor_mode: %s' % sensor_for_sensor_mode)
+
+        # testing area
+        # try:
+            # kettle_heater_id = "P2v35bB4YGuYba75WzN6NT"
+            # heater = self.cbpi.actor.find_by_id(kettle_heater_id)
+            # kettle_heater_status = heater.instance.state
+            # logger.info("kettle_heater_status {}".format(kettle_heater_status))
+        # except Exception as e:
+            # logger.error(e)
 
         # *********************************************************************************************************
         while True:
@@ -229,19 +239,23 @@ class LCDisplay(CBPiExtension):
         kettlevalues = await self.get_kettle_values(kettle_id)
         kettle_name1 = kettlevalues['kettle_name']
         kettle_name = await self.cbidecode(kettle_name1, charmap)
+        # kettle_name = kettle_name1
         kettle_target_temp = kettlevalues['kettle_target_temp']
         kettle_sensor_id = kettlevalues['kettle_sensor_id']
-        kettle_heater_status = 1  # todo 1 simulates on
-
+        kettle = self.cbpi.kettle.find_by_id(kettle_id)
+        heater = self.cbpi.actor.find_by_id(kettle.heater)
+        kettle_heater_status = heater.instance.state
+        # logger.info("kettle_heater_status main {}".format(kettle_heater_status))
         lcd_unit = await self.get_cbpi_temp_unit()
-        is_timer_running = True   # todo
+
+        is_timer_running = True   # todo just moc mode
 
         # line1 the stepname
-        line1 = ('%s' % (await self.cbidecode(stepname, charmap)).ljust(20)[:20])
+        line1 = ('%s' % stepname.ljust(20)[:20])
 
         # line2 when steptimer is running show remaining time and kettlename
         if is_timer_running is not True:
-            time_remaining = "00:01:01"  # todo
+            time_remaining = "00:01:01"  # todo just moc mode
             line2 = (("%s %s" % (kettle_name.ljust(12)[:11], time_remaining)).ljust(20)[:20])
             pass
         else:
@@ -264,7 +278,7 @@ class LCDisplay(CBPiExtension):
         lcd.write_string(line1.ljust(20))
         lcd.cursor_pos = (0, 19)
         global BLINK
-        if BLINK is False and kettle_heater_status != 0:
+        if BLINK is False and kettle_heater_status is True:
             lcd.write_string("\x00")
             BLINK = True
         else:
@@ -333,7 +347,9 @@ class LCDisplay(CBPiExtension):
         try:
             ip_addr = socket.inet_ntoa(
                 fcntl.ioctl(so.fileno(), 0x8915, struct.pack('256s', bytes(interface.encode())[:15]))[20:24])
-        except:
+        except Exception as e:
+            logger.warning('no ip found')
+            logger.warning(e)
             return ip_addr
         finally:
             pass
@@ -416,7 +432,7 @@ class LCDisplay(CBPiExtension):
             logger.info("LCD_Display_Mode added")
             try:
                 await self.cbpi.config.add('LCD_Display_Mode', 'Multidisplay', ConfigType.SELECT,
-                                           'select the mode of the LCD Display, consult readme, NO! CBPi reboot'
+                                           'select the mode of the LCD Display, consult readme, NO! CBPi reboot '
                                            'required', [{"label": "Multidisplay", "value": 'Multidisplay'},
                                                         {"label": "Singledisplay", "value": 'Singledisplay'},
                                                         {"label": "Sensordisplay", "value": 'Sensordisplay'}])
@@ -495,11 +511,34 @@ class LCDisplay(CBPiExtension):
             return string
         pass
 
+    async def get_next_hop_timer(self, active_step, time_left):
+        hop_timers = []
+        for x in range(1, 6):
+            try:
+                hop = int((active_step['Hop_' + str(x)])) * 60
+            except:
+                hop = None
+            if hop is not None:
+                hop_left = time_left - hop
+                if hop_left > 0:
+                    hop_timers.append(hop_left)
+                    if DEBUG: logger.info("LCDDisplay  - get_next_hop_timer %s %s" % (x, str(hop_timers)))
+                pass
+            pass
+        pass
+
+        if len(hop_timers) != 0:
+            next_hop_timer = time.strftime("%H:%M:%S", time.gmtime(min(hop_timers)))
+        else:
+            next_hop_timer = None
+        return next_hop_timer
+        pass
+
     async def is_step_running1(self):
-        # ToDo : not used
+        # ToDo : not used and not working (unluckily)
         try:
-            # url = "http://127.0.0.1:" + self.port + "/step2/"
-            url = "http://127.0.0.1:8000/recipe/"
+            url = "http://127.0.0.1:8000/step2/"
+            # url = "http://127.0.0.1:8000/recipe/"
 
             conn = aiohttp.TCPConnector(
                 family=0,
@@ -518,36 +557,6 @@ class LCDisplay(CBPiExtension):
         except Exception as e:
             logger.warning(e)
         pass
-
-    async def is_step_running2(self):
-        # ToDo : not used
-        try:
-            # ToDo : find a more generalist way to find the right path for config.json file
-            # just an example to access a json file
-
-            filename = '/home/pi/cbpi4/config/step_data.json'
-            step_json_obj = json.loads(open(filename).read())
-            steps = step_json_obj['steps']
-            logger.info("steps %s" % steps)
-            indices = len(steps)
-            logger.info("indices %s" % str(indices))
-            i = 0
-            while i < len(steps):
-                print(steps[i])
-                print(len(steps[i]))
-                print(steps[i]["name"])
-                print(steps[i]["status"])
-                i = i + 1
-            pass
-
-            # print(self.cbpi.step.get_state())
-            steps_obj = self.cbpi.step.get_state()
-            print(steps_obj)
-            real_steps_obj = steps_obj["steps"]
-            print(real_steps_obj)
-
-        except Exception as e:
-            logger.warning(e)
 
     async def get_active_step_values(self):
         try:
