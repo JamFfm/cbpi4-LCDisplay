@@ -35,8 +35,9 @@ from cbpi.controller.sensor_controller import SensorController
 # 02.04.2021
 # 18.04.2021 progress, thanks to avollkopf
 # 28.04.2021 little progress, heater state can be detected, apparently cbpicodec is not necessary to convert umlaute.
-# I leave it because I woluld like to handle the A00 parameter as I am not sure if all versions of LCD can use umlaute.
-# Timer detect is missing :-)
+# I leave it because I would like to handle the A00 parameter as I am not sure if all versions of LCD can use umlaute.
+# Timer detect implemented
+# brake on boil step
 
 logger = logging.getLogger(__name__)
 DEBUG = True  # turn True to show (much) more debug info in app.log
@@ -233,45 +234,77 @@ class LCDisplay(CBPiExtension):
     async def show_singledisplay(self, kettle_id, charmap="A00"):
 
         steps = await self.get_active_step_values()
-        stepname1 = steps['active_step_name']
-        stepname = await self.cbidecode(stepname1, charmap)
+        step_name1 = steps['active_step_name']
+        step_name = await self.cbidecode(step_name1, charmap)
+        # step_name = step_name1
+        step_state = steps['active_step_state_text']
+        # logger.info("step_state main: {}".format(step_state))
+        remaining_time = step_state.replace("Status: ", "")
+        logger.info("remaining_time main: {}".format(remaining_time))
 
         kettlevalues = await self.get_kettle_values(kettle_id)
         kettle_name1 = kettlevalues['kettle_name']
         kettle_name = await self.cbidecode(kettle_name1, charmap)
         # kettle_name = kettle_name1
+
         kettle_target_temp = kettlevalues['kettle_target_temp']
         kettle_sensor_id = kettlevalues['kettle_sensor_id']
         kettle = self.cbpi.kettle.find_by_id(kettle_id)
         heater = self.cbpi.actor.find_by_id(kettle.heater)
         kettle_heater_status = heater.instance.state
         # logger.info("kettle_heater_status main {}".format(kettle_heater_status))
+
+        sensor_value = self.cbpi.sensor.get_sensor_value(kettle_sensor_id).get('value')
+
         lcd_unit = await self.get_cbpi_temp_unit()
 
-        is_timer_running = True   # todo just moc mode
-
-        # line1 the stepname
-        line1 = ('%s' % stepname.ljust(20)[:20])
-
-        # line2 when steptimer is running show remaining time and kettlename
-        if is_timer_running is not True:
-            time_remaining = "00:01:01"  # todo just moc mode
-            line2 = (("%s %s" % (kettle_name.ljust(12)[:11], time_remaining)).ljust(20)[:20])
-            pass
+        if "Waiting for Target Temp" in remaining_time:
+            is_timer_running = False
+        elif remaining_time == "":
+            is_timer_running = False
         else:
-            line2 = ('%s' % kettle_name.ljust(20)[:20])
+            is_timer_running = True
         pass
 
-        # line 3 Target temp
-        line3 = ("Targ. Temp:%6.2f%s%s" % (float(kettle_target_temp), "°", lcd_unit)).ljust(20)[:20]
+        boil_check = step_name.lower()
+        if boil_check.find("boil") != -1:  # Boil Step
+            try:
+                time_left = sum(x * int(t) for x, t in zip([3600, 60, 1], step_state.split(":")))
+            except:
+                time_left = None
+            next_hop_alert = None
+            if time_left is not None:
+                next_hop_alert = await self.get_next_hop_timer(active_step_props, time_left)  # todo
 
-        # line 4 Current temp
-        try:
-            sensor_value = self.cbpi.sensor.get_sensor_value(kettle_sensor_id).get('value')
-            line4 = ("Curr. Temp:%6.2f%s%s" % (float(sensor_value), "°", lcd_unit)).ljust(20)[:20]
-        except Exception as e:
-            logger.error(e)
-            line4 = (u"Curr. Temp: {}".format("No Data"))[:20]
+            line1 = ("%s" % step_name).ljust(20)
+            line2 = ("%s %s" % (kettle_name.ljust(12)[:11], step_state)).ljust(20)[:20]
+            line3 = ("Set|Act:%4.0f°%5.1f%s%s" % (float(kettle_target_temp), float(sensor_value), "°", lcd_unit))[:20]
+            if next_hop_alert is not None:
+                line4 = ("Add Hop in: %s" % next_hop_alert)[:20]
+            else:
+                line4 = "                    "[:20]
+        else:
+            # line1 the stepname
+            line1 = ('%s' % step_name.ljust(20)[:20])
+
+            # line2 when steptimer is running show remaining time and kettlename
+            if is_timer_running is True:
+                line2 = (("%s %s" % (kettle_name.ljust(12)[:11], remaining_time)).ljust(20)[:20])
+                pass
+            else:
+                line2 = ('%s' % kettle_name.ljust(20)[:20])
+            pass
+
+            # line 3 Target temp
+            line3 = ("Targ. Temp:%6.2f%s%s" % (float(kettle_target_temp), "°", lcd_unit)).ljust(20)[:20]
+
+            # line 4 Current temp
+            try:
+
+                line4 = ("Curr. Temp:%6.2f%s%s" % (float(sensor_value), "°", lcd_unit)).ljust(20)[:20]
+            except Exception as e:
+                logger.error(e)
+                line4 = (u"Curr. Temp: {}".format("No Data"))[:20]
 
         lcd._set_cursor_mode('hide')
         lcd.cursor_pos = (0, 0)
@@ -309,6 +342,29 @@ class LCDisplay(CBPiExtension):
         lcd.cursor_pos = (3, 0)
         lcd.write_string(line4.ljust(20))
         await asyncio.sleep(refresh_time)
+
+    async def get_next_hop_timer(self, active_step, time_left):
+        hop_timers = []
+        for x in range(1, 6):
+            try:
+                hop = int((active_step['Hop_' + str(x)])) * 60
+            except:
+                hop = None
+            if hop is not None:
+                hop_left = time_left - hop
+                if hop_left > 0:
+                    hop_timers.append(hop_left)
+                    if DEBUG: logger.info("LCDDisplay  - get_next_hop_timer %s %s" % (x, str(hop_timers)))
+                pass
+            pass
+        pass
+
+        if len(hop_timers) != 0:
+            next_hop_timer = time.strftime("%H:%M:%S", time.gmtime(min(hop_timers)))
+        else:
+            next_hop_timer = None
+        return next_hop_timer
+        pass
 
     async def get_cbpi_version(self):
         try:
