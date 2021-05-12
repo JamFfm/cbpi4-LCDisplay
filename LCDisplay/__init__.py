@@ -239,27 +239,25 @@ class LCDisplay(CBPiExtension):
         step_state = steps['active_step_state_text']
         # logger.info("step_state main: {}".format(step_state))
         steps_props = steps['active_step_probs']
-        logger.info("hops main: {}".format(steps_props))
+
         remaining_time = step_state.replace("Status: ", "")
-        logger.info("remaining_time main: {}".format(remaining_time))
 
         kettlevalues = await self.get_kettle_values(kettle_id)
         kettle_name1 = kettlevalues['kettle_name']
         kettle_name = await self.cbidecode(kettle_name1, charmap)
         # kettle_name = kettle_name1
-
         kettle_target_temp = kettlevalues['kettle_target_temp']
         kettle_sensor_id = kettlevalues['kettle_sensor_id']
         kettle = self.cbpi.kettle.find_by_id(kettle_id)
         heater = self.cbpi.actor.find_by_id(kettle.heater)
         kettle_heater_status = heater.instance.state
-        # logger.info("kettle_heater_status main: {}".format(kettle_heater_status))
 
         sensor_value = self.cbpi.sensor.get_sensor_value(kettle_sensor_id).get('value')
 
         lcd_unit = await self.get_cbpi_temp_unit()
 
         if "Waiting for Target Temp" in remaining_time:
+            remaining_time = "Wait"
             is_timer_running = False
         elif remaining_time == "":
             is_timer_running = False
@@ -274,15 +272,23 @@ class LCDisplay(CBPiExtension):
                 time_left = sum(x * int(t) for x, t in zip([3600, 60, 1], remaining_time.split(":")))  # convert 00:00:00 to sec
                 next_hop_alert = await self.get_next_hop_timer(steps_props, time_left)
             except Exception as e:
-                logger.error(e)
+                # logger.error(e)
                 next_hop_alert = None
             line1 = ("%s" % step_name).ljust(20)
-            line2 = ("%s %s" % (kettle_name.ljust(12)[:11], remaining_time)).ljust(20)[:20]
+            ###
+            if is_timer_running is True:
+                line2 = (("%s %s" % (kettle_name.ljust(12)[:11], remaining_time)).ljust(20)[:20])
+                pass
+            else:
+                line2 = ('%s' % kettle_name.ljust(20)[:20])
+            pass
+            ###
             try:
                 line3 = ("Set|Act:%4.0f°%5.1f%s%s" % (float(kettle_target_temp), float(sensor_value), "°", lcd_unit))[:20]
             except Exception as e:
                 logger.error(e)
                 line3 = ("Set|Act:%4.0f°%s%s%s" % (float(kettle_target_temp), " n.a ", "°", lcd_unit))[:20]
+            ###
             if next_hop_alert is not None:
                 line4 = ("Add Hop in: %s" % next_hop_alert)[:20]
             else:
