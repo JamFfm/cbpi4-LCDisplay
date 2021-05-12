@@ -20,8 +20,7 @@ from cbpi.api.base import CBPiBase
 from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS
 from cbpi.controller.sensor_controller import SensorController
 
-
-# LCDisplay VERSION = '5.0.02'
+# LCDisplay VERSION = '5.0.03'
 #
 # this plug in is made for CBPI4. Do not use it in CBPI3.
 # The LCD-library and LCD-driver are taken from RPLCD Project version 1.0. The documentation:
@@ -129,12 +128,12 @@ class LCDisplay(CBPiExtension):
         try:
             lcd = CharLCD(i2c_expander='PCF8574', address=address, port=1, cols=20, rows=4, dotsize=8, charmap=charmap,
                           auto_linebreaks=True, backlight_enabled=True)
-            lcd.create_char(0, bierkrug)    # u"\x00"  -->beerglass symbol
-            lcd.create_char(1, cool)        # u"\x01"  -->Ice symbol
-            lcd.create_char(2, awithdots)   # u"\x02"  -->Ä
-            lcd.create_char(3, owithdots)   # u"\x03"  -->Ö
-            lcd.create_char(4, uwithdots)   # u"\x04"  -->Ü
-            lcd.create_char(5, esszett)     # u"\x05"  -->ß
+            lcd.create_char(0, bierkrug)  # u"\x00"  -->beerglass symbol
+            lcd.create_char(1, cool)  # u"\x01"  -->Ice symbol
+            lcd.create_char(2, awithdots)  # u"\x02"  -->Ä
+            lcd.create_char(3, owithdots)  # u"\x03"  -->Ö
+            lcd.create_char(4, uwithdots)  # u"\x04"  -->Ü
+            lcd.create_char(5, esszett)  # u"\x05"  -->ß
             if DEBUG: logger.info('LCDisplay - Info: LCD object set')
         except Exception as e:
             if DEBUG: logger.info('LCDisplay - Error: LCD object not set, wrong LCD address: {}'.format(e))
@@ -163,12 +162,12 @@ class LCDisplay(CBPiExtension):
 
         # testing area
         # try:
-            # kettle_heater_id = "P2v35bB4YGuYba75WzN6NT"
-            # heater = self.cbpi.actor.find_by_id(kettle_heater_id)
-            # kettle_heater_status = heater.instance.state
-            # logger.info("kettle_heater_status {}".format(kettle_heater_status))
+        # kettle_heater_id = "P2v35bB4YGuYba75WzN6NT"
+        # heater = self.cbpi.actor.find_by_id(kettle_heater_id)
+        # kettle_heater_status = heater.instance.state
+        # logger.info("kettle_heater_status {}".format(kettle_heater_status))
         # except Exception as e:
-            # logger.error(e)
+        # logger.error(e)
 
         # *********************************************************************************************************
         while True:
@@ -239,6 +238,8 @@ class LCDisplay(CBPiExtension):
         # step_name = step_name1
         step_state = steps['active_step_state_text']
         # logger.info("step_state main: {}".format(step_state))
+        steps_props = steps['active_step_probs']
+        logger.info("hops main: {}".format(steps_props))
         remaining_time = step_state.replace("Status: ", "")
         logger.info("remaining_time main: {}".format(remaining_time))
 
@@ -252,7 +253,7 @@ class LCDisplay(CBPiExtension):
         kettle = self.cbpi.kettle.find_by_id(kettle_id)
         heater = self.cbpi.actor.find_by_id(kettle.heater)
         kettle_heater_status = heater.instance.state
-        # logger.info("kettle_heater_status main {}".format(kettle_heater_status))
+        # logger.info("kettle_heater_status main: {}".format(kettle_heater_status))
 
         sensor_value = self.cbpi.sensor.get_sensor_value(kettle_sensor_id).get('value')
 
@@ -262,23 +263,26 @@ class LCDisplay(CBPiExtension):
             is_timer_running = False
         elif remaining_time == "":
             is_timer_running = False
+        elif remaining_time is None:
+            is_timer_running = False
         else:
             is_timer_running = True
         pass
-
         boil_check = step_name.lower()
-        if boil_check.find("boil") != -1:  # Boil Step
+        if ("boil" in boil_check) is True:  # string "boil" in stepname detected
             try:
-                time_left = sum(x * int(t) for x, t in zip([3600, 60, 1], step_state.split(":")))
-            except:
-                time_left = None
-            next_hop_alert = None
-            if time_left is not None:
-                next_hop_alert = await self.get_next_hop_timer(active_step_props, time_left)  # todo
-
+                time_left = sum(x * int(t) for x, t in zip([3600, 60, 1], remaining_time.split(":")))  # convert 00:00:00 to sec
+                next_hop_alert = await self.get_next_hop_timer(steps_props, time_left)
+            except Exception as e:
+                logger.error(e)
+                next_hop_alert = None
             line1 = ("%s" % step_name).ljust(20)
-            line2 = ("%s %s" % (kettle_name.ljust(12)[:11], step_state)).ljust(20)[:20]
-            line3 = ("Set|Act:%4.0f°%5.1f%s%s" % (float(kettle_target_temp), float(sensor_value), "°", lcd_unit))[:20]
+            line2 = ("%s %s" % (kettle_name.ljust(12)[:11], remaining_time)).ljust(20)[:20]
+            try:
+                line3 = ("Set|Act:%4.0f°%5.1f%s%s" % (float(kettle_target_temp), float(sensor_value), "°", lcd_unit))[:20]
+            except Exception as e:
+                logger.error(e)
+                line3 = ("Set|Act:%4.0f°%s%s%s" % (float(kettle_target_temp), " n.a ", "°", lcd_unit))[:20]
             if next_hop_alert is not None:
                 line4 = ("Add Hop in: %s" % next_hop_alert)[:20]
             else:
@@ -347,8 +351,10 @@ class LCDisplay(CBPiExtension):
         hop_timers = []
         for x in range(1, 6):
             try:
-                hop = int((active_step['Hop_' + str(x)])) * 60
-            except:
+                hop_search_string = ('Hop_'+str(x))
+                hop = active_step[hop_search_string]
+                hop = int(hop) * 60
+            except Exception as e:
                 hop = None
             if hop is not None:
                 hop_left = time_left - hop
@@ -633,11 +639,13 @@ class LCDisplay(CBPiExtension):
                     # print(active_step_target_temp)
                     active_step_timer_value = ("Timer: %s" % (steps[i]["props"]["Timer"]))
                     # print(active_step_timer_value)
+                    active_step_probs = (steps[i]["props"])
                     return {'active_step_name': active_step_name,
                             'active_step_status': active_step_status,
                             'active_step_state_text': active_step_state_text,
                             'active_step_target_temp': active_step_target_temp,
-                            'active_step_timer_value': active_step_timer_value}
+                            'active_step_timer_value': active_step_timer_value,
+                            'active_step_probs': active_step_probs}
                 else:
                     result = 'no active step'
                 pass
@@ -698,4 +706,3 @@ class LCDisplay(CBPiExtension):
 
 def setup(cbpi):
     cbpi.plugin.register("LCDisplay", LCDisplay)
-
