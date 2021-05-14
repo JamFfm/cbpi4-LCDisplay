@@ -20,7 +20,7 @@ from cbpi.api.base import CBPiBase
 from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS
 from cbpi.controller.sensor_controller import SensorController
 
-# LCDisplay VERSION = '5.0.03'
+# LCDisplay VERSION = '5.0.04'
 #
 # this plug in is made for CBPI4. Do not use it in CBPI3.
 # The LCD-library and LCD-driver are taken from RPLCD Project version 1.0. The documentation:
@@ -35,8 +35,8 @@ from cbpi.controller.sensor_controller import SensorController
 # 18.04.2021 progress, thanks to avollkopf
 # 28.04.2021 little progress, heater state can be detected, apparently cbpicodec is not necessary to convert umlaute.
 # I leave it because I would like to handle the A00 parameter as I am not sure if all versions of LCD can use umlaute.
-# Timer detect implemented
-# brake on boil step
+# 13.05.2021 fixed boilstep detection with hoptimer
+# 15.05.2021 added multimode
 
 logger = logging.getLogger(__name__)
 DEBUG = True  # turn True to show (much) more debug info in app.log
@@ -160,15 +160,6 @@ class LCDisplay(CBPiExtension):
         sensor_for_sensor_mode = await self.set_lcd_sensortype_for_sensor_mode()
         logger.info('LCDisplay - LCD sensor_for_sensor_mode: %s' % sensor_for_sensor_mode)
 
-        # testing area
-        # try:
-        # kettle_heater_id = "P2v35bB4YGuYba75WzN6NT"
-        # heater = self.cbpi.actor.find_by_id(kettle_heater_id)
-        # kettle_heater_status = heater.instance.state
-        # logger.info("kettle_heater_status {}".format(kettle_heater_status))
-        # except Exception as e:
-        # logger.error(e)
-
         # *********************************************************************************************************
         while True:
             # this is the main code repeated constantly
@@ -177,15 +168,12 @@ class LCDisplay(CBPiExtension):
             refresh = await self.set_lcd_refresh()
             sensortype = await self.set_lcd_sensortype_for_sensor_mode()
             active_step = await self.get_active_step_values()
-            # print(active_step)
+
             if active_step != 'no active step' and display_mode == 'Multidisplay':
-                # print(active_step['active_step_name'] + 'Multidisplay')
                 await self.show_multidisplay(refresh, charmap)
             elif active_step != 'no active step' and display_mode == 'Singledisplay':
-                # print(active_step['active_step_name'] + 'Singledisplay')
                 await self.show_singledisplay(single_kettle_id, charmap)
             elif active_step != 'no active step' and display_mode == 'Sensordisplay':
-                # print(active_step['active_step_name'] + 'Sensordisplay')
                 await self.show_sensordisplay(sensortype, refresh, charmap)
             else:
                 await self.show_standby()
@@ -194,6 +182,7 @@ class LCDisplay(CBPiExtension):
         # *********************************************************************************************************
 
     async def show_standby(self):
+
         ip = await self.set_ip()
         cbpi_version = await self.get_cbpi_version()
         breweryname = await self.get_breweryname()
@@ -210,27 +199,23 @@ class LCDisplay(CBPiExtension):
 
     async def show_multidisplay(self, refresh_time=2.0, charmap="A00"):
 
-        kettle_heater_status = 1
-        line1 = (("Multidisplay").ljust(20))
-        line2 = (("Multidisplay").ljust(20))
-        line3 = (("Multidisplay").ljust(20))
-        line4 = ((strftime("%Y-%m-%d %H:%M:%S", time.localtime())).ljust(20))
+        kettle_json_obj = self.cbpi.kettle.get_state()
+        kettles = kettle_json_obj['data']
+        i = 0
+        multidisplay = True
+        while i < len(kettles):
+            try:
+                kettle_id = kettles[i]["id"]
+                # kettle_name = (kettles[i]["name"])
+                # logger.info("multi kettle_name: {}".format(kettle_name))
+                await self.show_singledisplay(kettle_id, charmap, refresh_time, multidisplay)
+            except Exception as e:
+                logger.error(e)
+            pass
+            i =i+1
+        pass
 
-        lcd._set_cursor_mode('hide')
-        lcd.cursor_pos = (0, 0)
-        lcd.write_string(line1.ljust(20))
-        lcd.cursor_pos = (0, 19)
-        if kettle_heater_status != 0:
-            lcd.write_string(u"\x00")
-        lcd.cursor_pos = (1, 0)
-        lcd.write_string(line2.ljust(20))
-        lcd.cursor_pos = (2, 0)
-        lcd.write_string(line3.ljust(20))
-        lcd.cursor_pos = (3, 0)
-        lcd.write_string(line4.ljust(20))
-        await asyncio.sleep(refresh_time)
-
-    async def show_singledisplay(self, kettle_id, charmap="A00"):
+    async def show_singledisplay(self, kettle_id, charmap="A00", refresh_time=1.0, multidisplay=False):
 
         steps = await self.get_active_step_values()
         step_name1 = steps['active_step_name']
@@ -269,30 +254,38 @@ class LCDisplay(CBPiExtension):
         boil_check = step_name.lower()
         if ("boil" in boil_check) is True:  # string "boil" in stepname detected
             try:
-                time_left = sum(x * int(t) for x, t in zip([3600, 60, 1], remaining_time.split(":")))  # convert 00:00:00 to sec
+                # convert 00:00:00 to sec
+                time_left = sum(x * int(t) for x, t in zip([3600, 60, 1], remaining_time.split(":")))
                 next_hop_alert = await self.get_next_hop_timer(steps_props, time_left)
             except Exception as e:
                 # logger.error(e)
                 next_hop_alert = None
+            pass
+            # line1 the stepname
             line1 = ("%s" % step_name).ljust(20)
-            ###
+
+            # line2 when steptimer is running show remaining time and kettlename
             if is_timer_running is True:
                 line2 = (("%s %s" % (kettle_name.ljust(12)[:11], remaining_time)).ljust(20)[:20])
                 pass
             else:
                 line2 = ('%s' % kettle_name.ljust(20)[:20])
             pass
-            ###
+
+            # step3 target temp and current temp in one line
             try:
                 line3 = ("Set|Act:%4.0f°%5.1f%s%s" % (float(kettle_target_temp), float(sensor_value), "°", lcd_unit))[:20]
             except Exception as e:
                 logger.error(e)
                 line3 = ("Set|Act:%4.0f°%s%s%s" % (float(kettle_target_temp), " n.a ", "°", lcd_unit))[:20]
-            ###
+            pass
+
+            # line 4 if hoptimer running show it
             if next_hop_alert is not None:
                 line4 = ("Add Hop in: %s" % next_hop_alert)[:20]
             else:
                 line4 = "                    "[:20]
+            pass
         else:
             # line1 the stepname
             line1 = ('%s' % step_name.ljust(20)[:20])
@@ -310,30 +303,44 @@ class LCDisplay(CBPiExtension):
 
             # line 4 Current temp
             try:
-
                 line4 = ("Curr. Temp:%6.2f%s%s" % (float(sensor_value), "°", lcd_unit)).ljust(20)[:20]
             except Exception as e:
                 logger.error(e)
                 line4 = (u"Curr. Temp: {}".format("No Data"))[:20]
+            pass
+        pass
 
         lcd._set_cursor_mode('hide')
         lcd.cursor_pos = (0, 0)
         lcd.write_string(line1.ljust(20))
         lcd.cursor_pos = (0, 19)
-        global BLINK
-        if BLINK is False and kettle_heater_status is True:
-            lcd.write_string("\x00")
-            BLINK = True
+        # this is all about showing beerglass if heater of kettle is on.
+        # Blinking in singlemode, constant in multimode
+        logger.info("Blinking multidisplay is in status: {}".format(multidisplay))
+        if multidisplay is False:
+            global BLINK
+            if BLINK is False and kettle_heater_status is True:
+                lcd.write_string("\x00")
+                BLINK = True
+            else:
+                lcd.write_string(" ")
+                BLINK = False
+            pass
+        elif multidisplay is True:
+            if kettle_heater_status is True:
+                lcd.write_string(u"\x00")
+            pass
         else:
             lcd.write_string(" ")
-            BLINK = False
+            logger.error("Blinking multidisplay is in status: {}".format(multidisplay))
+        pass
         lcd.cursor_pos = (1, 0)
         lcd.write_string(line2.ljust(20))
         lcd.cursor_pos = (2, 0)
         lcd.write_string(line3.ljust(20))
         lcd.cursor_pos = (3, 0)
         lcd.write_string(line4.ljust(20))
-        await asyncio.sleep(1)
+        await asyncio.sleep(refresh_time)
 
     async def show_sensordisplay(self, sensortype, refresh_time=2.0, charmap="A00"):
 
@@ -432,17 +439,6 @@ class LCDisplay(CBPiExtension):
             brewery = "no name"
         pass
         return brewery
-
-    async def get_breweryname1(self):
-        # ToDo : not used
-        # ToDo : find a more generalist way to find the right path for config.json file
-        # just an example to access a json file
-        filename = '/home/pi/cbpi4/config/config.json'
-        brewery_json_obj = json.loads(open(filename).read())
-        brewery = brewery_json_obj['BREWERY_NAME']['value']
-        # Todo : close file?
-        return brewery
-        pass
 
     async def set_lcd_address(self):
         # global lcd_address
