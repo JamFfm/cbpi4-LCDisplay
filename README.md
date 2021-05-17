@@ -1,4 +1,4 @@
-![](https://img.shields.io/badge/CBPi%204%20addin-functionable-green.svg)  ![](https://img.shields.io/badge/license%20 GNU-green.svg) ![](https://img.shields.io/github/last-commit/JamFfm/cbpi4-LCDisplay.svg?style=flat) ![](https://img.shields.io/github/release-pre/JamFfm/cbpi4-LCDisplay.svg?style=flat)
+![](https://img.shields.io/badge/CBPi%204%20addin-functionable-green.svg)  ![](https://img.shields.io/github/license/JamFfm/cbpi4-LCDisplay) ![](https://img.shields.io/github/last-commit/JamFfm/cbpi4-LCDisplay.svg?style=flat) ![](https://img.shields.io/github/release-pre/JamFfm/cbpi4-LCDisplay.svg?style=flat)
 
 # **LCD add-on for CraftBeerPi 4**
 
