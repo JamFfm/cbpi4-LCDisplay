@@ -5,22 +5,18 @@ import fcntl
 import struct
 import logging
 import asyncio
-import json
-import aiohttp
-import cbpi
+# import json
+# import aiohttp
+# import cbpi
 from .RPLCD.i2c import CharLCD
 from time import strftime
 from cbpi.api import *
 from cbpi.api.config import ConfigType
-from cbpi.api.dataclasses import Kettle, Props, Sensor
-from cbpi.api.timer import Timer
-from datetime import datetime
-from typing import KeysView
-from cbpi.api.base import CBPiBase
-from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS
-from cbpi.controller.sensor_controller import SensorController
+# from cbpi.api.dataclasses import ConfigType
+# from cbpi.api.dataclasses import Kettle, Props, Sensor
+from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS #  todo
 
-# LCDisplay VERSION = '5.0.04'
+# LCDisplay VERSION = '5.0.05'
 #
 # this plug in is made for CBPI4. Do not use it in CBPI3.
 # The LCD-library and LCD-driver are taken from RPLCD Project version 1.0. The documentation:
@@ -37,6 +33,7 @@ from cbpi.controller.sensor_controller import SensorController
 # I leave it because I would like to handle the A00 parameter as I am not sure if all versions of LCD can use umlaute.
 # 13.05.2021 fixed boilstep detection with hoptimer
 # 15.05.2021 added multimode
+# 16.05.2021 added sensormode
 
 logger = logging.getLogger(__name__)
 DEBUG = True  # turn True to show (much) more debug info in app.log
@@ -136,10 +133,11 @@ class LCDisplay(CBPiExtension):
             lcd.create_char(5, esszett)  # u"\x05"  -->ß
             if DEBUG: logger.info('LCDisplay - Info: LCD object set')
         except Exception as e:
-            if DEBUG: logger.info('LCDisplay - Error: LCD object not set, wrong LCD address: {}'.format(e))
-            self.cbpi.notify('LCDisplay:', 'LCD Address is wrong. You have to choose a different LCD Address. '
-                                           'Key in at Raspi prompt: sudo i2cdetect -y 1 or sudo i2cdetect -y 0',
-                             NotificationType.ERROR)
+            if DEBUG: logger.info('LCDisplay - Error: LCD object not set or wrong LCD address: {}'.format(e))
+            # todo
+            # self.cbpi.notify('LCDisplay:', 'LCD Address is wrong. You have to choose a different LCD Address. '
+            #                               'Key in at Raspi prompt: sudo i2cdetect -y 1 or sudo i2cdetect -y 0',
+            #                 NotificationType.ERROR)
         pass
 
         refresh = await self.set_lcd_refresh()
@@ -212,11 +210,12 @@ class LCDisplay(CBPiExtension):
             except Exception as e:
                 logger.error(e)
             pass
-            i =i+1
+            i = i + 1
         pass
 
     async def show_singledisplay(self, kettle_id, charmap="A00", refresh_time=1.0, multidisplay=False):
 
+        # what if kettle_id ="" like a forgotten settings entry?  # todo
         steps = await self.get_active_step_values()
         step_name1 = steps['active_step_name']
         step_name = await self.cbidecode(step_name1, charmap)
@@ -251,6 +250,7 @@ class LCDisplay(CBPiExtension):
         else:
             is_timer_running = True
         pass
+
         boil_check = step_name.lower()
         if ("boil" in boil_check) is True:  # string "boil" in stepname detected
             try:
@@ -274,7 +274,8 @@ class LCDisplay(CBPiExtension):
 
             # step3 target temp and current temp in one line
             try:
-                line3 = ("Set|Act:%4.0f°%5.1f%s%s" % (float(kettle_target_temp), float(sensor_value), "°", lcd_unit))[:20]
+                line3 = ("Set|Act:%4.0f°%5.1f%s%s" % (float(kettle_target_temp), float(sensor_value), "°", lcd_unit))[
+                        :20]
             except Exception as e:
                 logger.error(e)
                 line3 = ("Set|Act:%4.0f°%s%s%s" % (float(kettle_target_temp), " n.a ", "°", lcd_unit))[:20]
@@ -343,25 +344,26 @@ class LCDisplay(CBPiExtension):
         await asyncio.sleep(refresh_time)
 
     async def show_sensordisplay(self, sensortype, refresh_time=2.0, charmap="A00"):
-        sensor_name = "no sensor"
-        sensor_value = "no value"
+        # sensor_name = "no sensor"
+        # sensor_value = "no value"
+
         try:
             sensor_json_obj = self.cbpi.sensor.get_state()
             sensors = sensor_json_obj['data']
             # if DEBUG: logger.info("sensors %s" % sensors)
             i = 0
             while i < len(sensors):
+                await asyncio.sleep(refresh_time)
                 if sensors[i]["type"] == sensortype:
                     # sensortype = (sensors[i]["type"])
                     sensor_name = (sensors[i]['name'])
                     sensor_id = (sensors[i]['id'])
                     sensor_value = self.cbpi.sensor.get_sensor_value(sensor_id).get('value')
 
-                    line1 = 'CBPi3 LCD Sensormode'
+                    line1 = 'CBPi4 LCD Sensormode'
                     line2 = '--------------------'
                     line3 = ('%s' % (await self.cbidecode(sensor_name, charmap)).ljust(20)[:20])
                     # line3 = (sensor_name.ljust(20))[:20]
-                    # line4 = ('%s' % str(sensor_value).ljust(20)[:20])
                     line4 = (str(sensor_value).ljust(20))[:20]
 
                     lcd._set_cursor_mode('hide')
@@ -373,9 +375,10 @@ class LCDisplay(CBPiExtension):
                     lcd.write_string(line3.ljust(20))
                     lcd.cursor_pos = (3, 0)
                     lcd.write_string(line4.ljust(20))
-                    await asyncio.sleep(refresh_time)
-                pass
                 i = i + 1
+                await asyncio.sleep(refresh_time)
+                # if there is no match to sensortype of any sensor there need to be a sleep. Otherwise this is Todo
+                # constantly running with no sleep at all. Blocks the website.
             pass
         except Exception as e:
             logger.info(e)
@@ -385,7 +388,7 @@ class LCDisplay(CBPiExtension):
         hop_timers = []
         for x in range(1, 6):
             try:
-                hop_search_string = ('Hop_'+str(x))
+                hop_search_string = ('Hop_' + str(x))
                 hop = active_step[hop_search_string]
                 hop = int(hop) * 60
             except Exception as e:
@@ -572,11 +575,11 @@ class LCDisplay(CBPiExtension):
     async def set_lcd_kettle_for_single_mode(self):
         kettle_id = self.cbpi.config.get('LCD_Singledisplay_Kettle', None)
         if kettle_id is None:
-            logger.info("LCD_Singledisplay_Kettle added")
             try:
                 await self.cbpi.config.add('LCD_Singledisplay_Kettle', '', ConfigType.KETTLE,
                                            'select the type of sensors to be displayed in LCD, consult readme, '
                                            'NO! CBPi reboot required')
+                logger.info("LCD_Singledisplay_Kettle added")
                 kettle_id = self.cbpi.config.get('LCD_Singledisplay_Kettle', None)
             except Exception as e:
                 logger.warning('Unable to update config')
@@ -588,35 +591,12 @@ class LCDisplay(CBPiExtension):
     async def cbidecode(self, string, charmap="A00"):  # Changes some german Letters to be displayed
         if charmap == "A00":
             # if DEBUG: logger.info('LCDDisplay  - string: %s' % string)
-            replaced_text = string.replace(u"Ä", u"\x02").replace(u"Ö", u"\x03").replace(u"Ü", u"\x04").replace(u"ß",
-                                                                                                                u"\x05")
+            replaced_text = string.replace("Ä", "\x02").replace("Ö", u"\x03").replace("Ü", "\x04").replace("ß",
+                                                                                                           "\x05")
             # if DEBUG: logger.info('LCDDisplay  - replaced_text: %s' % replaced_text)
             return replaced_text
         else:
             return string
-        pass
-
-    async def get_next_hop_timer1(self, active_step, time_left):  # todo
-        hop_timers = []
-        for x in range(1, 6):
-            try:
-                hop = int((active_step['Hop_' + str(x)])) * 60
-            except:
-                hop = None
-            if hop is not None:
-                hop_left = time_left - hop
-                if hop_left > 0:
-                    hop_timers.append(hop_left)
-                    if DEBUG: logger.info("LCDDisplay  - get_next_hop_timer %s %s" % (x, str(hop_timers)))
-                pass
-            pass
-        pass
-
-        if len(hop_timers) != 0:
-            next_hop_timer = time.strftime("%H:%M:%S", time.gmtime(min(hop_timers)))
-        else:
-            next_hop_timer = None
-        return next_hop_timer
         pass
 
     async def get_active_step_values(self):
@@ -630,14 +610,10 @@ class LCDisplay(CBPiExtension):
             while i < len(steps):
                 if steps[i]["status"] == "A":
                     active_step_name = ("Name: %s" % (steps[i]["name"]))
-                    # print(active_step_name)
                     active_step_status = ("Status: %s" % (steps[i]["status"]))
                     active_step_state_text = ("Status: %s" % (steps[i]["state_text"]))
-                    # print(active_step_status)
                     active_step_target_temp = ("Target Temp: %s°C" % (steps[i]["props"]["Temp"]))
-                    # print(active_step_target_temp)
                     active_step_timer_value = ("Timer: %s" % (steps[i]["props"]["Timer"]))
-                    # print(active_step_timer_value)
                     active_step_probs = (steps[i]["props"])
                     return {'active_step_name': active_step_name,
                             'active_step_status': active_step_status,
@@ -660,8 +636,6 @@ class LCDisplay(CBPiExtension):
                     'active_step_timer_value': 'error'}
         pass
 
-    pass
-
     async def get_kettle_values(self, kettle_id):
         try:
             kettle_json_obj = self.cbpi.kettle.get_state()
@@ -673,13 +647,9 @@ class LCDisplay(CBPiExtension):
                 if kettles[i]["id"] == kettle_id:
                     kettle_id = (kettles[i]["id"])
                     kettle_name = (kettles[i]["name"])
-                    # print(kettle_name)
                     kettle_heater_id = (kettles[i]["heater"])
-                    # print(kettle_heater_id)
                     kettle_sensor_id = (kettles[i]["sensor"])
-                    # print(kettle_sensor_id)
                     kettle_target_temp = (kettles[i]["target_temp"])
-                    # print(kettle_target_temp)
                     return {'kettle_id': kettle_id,
                             'kettle_name': kettle_name,
                             'kettle_heater_id': kettle_heater_id,
