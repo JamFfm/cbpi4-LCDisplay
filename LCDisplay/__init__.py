@@ -14,9 +14,10 @@ from cbpi.api import *
 from cbpi.api.config import ConfigType
 # from cbpi.api.dataclasses import ConfigType
 # from cbpi.api.dataclasses import Kettle, Props, Sensor
-from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS #  todo
+# from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS #  todo
+import cbpi.api.dataclasses as dataclasses # includes NotificationType like INFO, WARNING, ERROR, SUCCESS #  todo
 
-# LCDisplay VERSION = '5.0.05'
+# LCDisplay VERSION = '5.0.06'
 #
 # this plug in is made for CBPI4. Do not use it in CBPI3.
 # The LCD-library and LCD-driver are taken from RPLCD Project version 1.0. The documentation:
@@ -34,6 +35,11 @@ from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCE
 # 13.05.2021 fixed boilstep detection with hoptimer
 # 15.05.2021 added multimode
 # 16.05.2021 added sensormode
+# 05.06.2021 added function to select a sensor via GUI (craftbeerpi4-ui enhancement from avollkopf necessary)
+# and sensormode shows all sensors of same sensortype. To activate this function please change
+# set_lcd_sensortype_for_sensor_mode to set_lcd_sensortype_for_sensor_mode2
+# and change
+# set_lcd_sensortype_for_sensor_mode1 into set_lcd_sensortype_for_sensor_mode.
 
 logger = logging.getLogger(__name__)
 DEBUG = True  # turn True to show (much) more debug info in app.log
@@ -125,26 +131,23 @@ class LCDisplay(CBPiExtension):
         try:
             lcd = CharLCD(i2c_expander='PCF8574', address=address, port=1, cols=20, rows=4, dotsize=8, charmap=charmap,
                           auto_linebreaks=True, backlight_enabled=True)
-            lcd.create_char(0, bierkrug)  # u"\x00"  -->beerglass symbol
-            lcd.create_char(1, cool)  # u"\x01"  -->Ice symbol
-            lcd.create_char(2, awithdots)  # u"\x02"  -->Ä
-            lcd.create_char(3, owithdots)  # u"\x03"  -->Ö
-            lcd.create_char(4, uwithdots)  # u"\x04"  -->Ü
-            lcd.create_char(5, esszett)  # u"\x05"  -->ß
+            lcd.create_char(0, bierkrug)    # u"\x00"  -->beerglass symbol
+            lcd.create_char(1, cool)        # u"\x01"  -->Ice symbol
+            lcd.create_char(2, awithdots)   # u"\x02"  -->Ä
+            lcd.create_char(3, owithdots)   # u"\x03"  -->Ö
+            lcd.create_char(4, uwithdots)   # u"\x04"  -->Ü
+            lcd.create_char(5, esszett)     # u"\x05"  -->ß
             if DEBUG: logger.info('LCDisplay - Info: LCD object set')
         except Exception as e:
             if DEBUG: logger.info('LCDisplay - Error: LCD object not set or wrong LCD address: {}'.format(e))
             # todo
-            # self.cbpi.notify('LCDisplay:', 'LCD Address is wrong. You have to choose a different LCD Address. '
-            #                               'Key in at Raspi prompt: sudo i2cdetect -y 1 or sudo i2cdetect -y 0',
-            #                 NotificationType.ERROR)
+            # self.cbpi.notify('LCDisplay:', 'LCD Address is wrong. You have to choose a different LCD Address. Key in '
+            #                                'at Raspi prompt: sudo i2cdetect -y 1 or sudo i2cdetect -y 0',
+            #                  dataclasses.NotificationType.ERROR)
         pass
 
         refresh = await self.set_lcd_refresh()
         logger.info('LCDisplay - LCD refresh: %s' % refresh)
-
-        single_kettle_id = await self.set_lcd_kettle_for_single_mode()
-        logger.info('LCDisplay - LCD single_kettle_id: %s' % single_kettle_id)
 
         display_mode = await self.set_lcd_display_mode()
         logger.info('LCDisplay - LCD display_mode: %s' % display_mode)
@@ -162,16 +165,16 @@ class LCDisplay(CBPiExtension):
         while True:
             # this is the main code repeated constantly
             display_mode = await self.set_lcd_display_mode()
-            single_kettle_id = await self.set_lcd_kettle_for_single_mode()
             refresh = await self.set_lcd_refresh()
-            sensortype = await self.set_lcd_sensortype_for_sensor_mode()
             active_step = await self.get_active_step_values()
 
             if active_step != 'no active step' and display_mode == 'Multidisplay':
                 await self.show_multidisplay(refresh, charmap)
             elif active_step != 'no active step' and display_mode == 'Singledisplay':
+                single_kettle_id = await self.set_lcd_kettle_for_single_mode()
                 await self.show_singledisplay(single_kettle_id, charmap)
             elif active_step != 'no active step' and display_mode == 'Sensordisplay':
+                sensortype = await self.set_lcd_sensortype_for_sensor_mode()
                 await self.show_sensordisplay(sensortype, refresh, charmap)
             else:
                 await self.show_standby()
@@ -317,7 +320,9 @@ class LCDisplay(CBPiExtension):
         lcd.cursor_pos = (0, 19)
         # this is all about showing beerglass if heater of kettle is on.
         # blinking in singlemode, constant in multimode
-        logger.info("Blinking multidisplay is in status: {}".format(multidisplay))
+        # blinking in single mode indicates that instance is still running even if temperature is not
+        # changing for a while
+        # logger.info("Blinking multidisplay is in status: {}".format(multidisplay))
         if multidisplay is False:
             global BLINK
             if BLINK is False and kettle_heater_status is True:
@@ -343,45 +348,61 @@ class LCDisplay(CBPiExtension):
         lcd.write_string(line4.ljust(20))
         await asyncio.sleep(refresh_time)
 
-    async def show_sensordisplay(self, sensortype, refresh_time=2.0, charmap="A00"):
-        # sensor_name = "no sensor"
-        # sensor_value = "no value"
+    async def show_sensordisplay(self, sensortype, refresh_time=1.0, charmap="A00"):
 
-        try:
-            sensor_json_obj = self.cbpi.sensor.get_state()
-            sensors = sensor_json_obj['data']
-            # if DEBUG: logger.info("sensors %s" % sensors)
-            i = 0
-            while i < len(sensors):
+        if sensortype is not None:
+            try:
+                sensor_json_obj = self.cbpi.sensor.get_state()
+                sensors = sensor_json_obj['data']
+                # if DEBUG: logger.info("sensors %s" % sensors)
+                i = 0
+                while i < len(sensors):
+                    if sensors[i]["type"] == sensortype:
+                        # sensortype = (sensors[i]["type"])
+                        sensor_name = (sensors[i]['name'])
+                        sensor_id = (sensors[i]['id'])
+                        sensor_value = self.cbpi.sensor.get_sensor_value(sensor_id).get('value')
+
+                        line1 = 'CBPi4 LCD Sensormode'
+                        line2 = '--------------------'
+                        # line2 = ('Type: %s' % (await self.cbidecode(sensortype, charmap))).ljust(20)[:20]
+                        line3 = ('%s' % (await self.cbidecode(sensor_name, charmap)).ljust(20)[:20])
+                        # line3 = (sensor_name.ljust(20))[:20]
+                        line4 = (str(sensor_value).ljust(20))[:20]
+
+                        lcd._set_cursor_mode('hide')
+                        lcd.cursor_pos = (0, 0)
+                        lcd.write_string(line1.ljust(20))
+                        lcd.cursor_pos = (1, 0)
+                        lcd.write_string(line2.ljust(20))
+                        lcd.cursor_pos = (2, 0)
+                        lcd.write_string(line3.ljust(20))
+                        lcd.cursor_pos = (3, 0)
+                        lcd.write_string(line4.ljust(20))
+                        await asyncio.sleep(refresh_time)
+                    i = i + 1
+                    # Todo if there is no match to sensortype of any sensor there need to be a sleep. Otherwise this is
+                    #  constantly running with no sleep at all. Blocks the website. Unlikely that this will happen
+                pass
+            except Exception as e:
+                logger.info(e)
                 await asyncio.sleep(refresh_time)
-                if sensors[i]["type"] == sensortype:
-                    # sensortype = (sensors[i]["type"])
-                    sensor_name = (sensors[i]['name'])
-                    sensor_id = (sensors[i]['id'])
-                    sensor_value = self.cbpi.sensor.get_sensor_value(sensor_id).get('value')
+        else:
+            line1 = 'CBPi4 LCD Sensormode'
+            line2 = '--------------------'
+            line3 = 'no sensor selected  '
+            line4 = 'or defined          '
 
-                    line1 = 'CBPi4 LCD Sensormode'
-                    line2 = '--------------------'
-                    line3 = ('%s' % (await self.cbidecode(sensor_name, charmap)).ljust(20)[:20])
-                    # line3 = (sensor_name.ljust(20))[:20]
-                    line4 = (str(sensor_value).ljust(20))[:20]
-
-                    lcd._set_cursor_mode('hide')
-                    lcd.cursor_pos = (0, 0)
-                    lcd.write_string(line1.ljust(20))
-                    lcd.cursor_pos = (1, 0)
-                    lcd.write_string(line2.ljust(20))
-                    lcd.cursor_pos = (2, 0)
-                    lcd.write_string(line3.ljust(20))
-                    lcd.cursor_pos = (3, 0)
-                    lcd.write_string(line4.ljust(20))
-                i = i + 1
-                await asyncio.sleep(refresh_time)
-                # if there is no match to sensortype of any sensor there need to be a sleep. Otherwise this is Todo
-                # constantly running with no sleep at all. Blocks the website.
-            pass
-        except Exception as e:
-            logger.info(e)
+            lcd._set_cursor_mode('hide')
+            lcd.cursor_pos = (0, 0)
+            lcd.write_string(line1.ljust(20))
+            lcd.cursor_pos = (1, 0)
+            lcd.write_string(line2.ljust(20))
+            lcd.cursor_pos = (2, 0)
+            lcd.write_string(line3.ljust(20))
+            lcd.cursor_pos = (3, 0)
+            lcd.write_string(line4.ljust(20))
+            await asyncio.sleep(refresh_time)
         pass
 
     async def get_next_hop_timer(self, active_step, time_left):
@@ -448,7 +469,7 @@ class LCDisplay(CBPiExtension):
                 fcntl.ioctl(so.fileno(), 0x8915, struct.pack('256s', bytes(interface.encode())[:15]))[20:24])
         except Exception as e:
             logger.warning('no ip found')
-            logger.warning(e)
+            if DEBUG: logger.warning(e)
             return ip_addr
         finally:
             pass
@@ -531,24 +552,32 @@ class LCDisplay(CBPiExtension):
         pass
         return mode
 
-    async def set_lcd_sensortype_for_sensor_mode1(self):  # todo
-        # ToDo : not used
-        sensor_type = self.cbpi.config.get('LCD_Display_Sensortype', None)
-        if sensor_type is None:
+    async def set_lcd_sensortype_for_sensor_mode1(self):
+        # this mode is the desired mode but requires avollkopfs craftbeerpi4-ui
+        sensor_id = self.cbpi.config.get('LCD_Display_Sensortype', None)  # this is only Sensor ID not type
+        if sensor_id is None:
             try:
                 await self.cbpi.config.add('LCD_Display_Sensortype', '', ConfigType.SENSOR,
-                                           'select the type of sensors to be displayed in LCD, consult readme, '
+                                           'select a sensor which is representing the sensortype you want to monitor '
+                                           'in LCD, consult readme, '
                                            'NO! CBPi reboot required')
                 logger.info("LCD_Display_Sensortype added")
-                sensor_type = self.cbpi.config.get('LCD_Display_Sensortype', None)
+                sensor_id = self.cbpi.config.get('LCD_Display_Sensortype', None)
             except Exception as e:
                 logger.warning('Unable to update config')
                 logger.warning(e)
             pass
         pass
+        if sensor_id is not None:
+            sensor_values = await self.get_sensor_values_by_id(sensor_id)
+            sensor_type = (sensor_values["sensor_type"])
+        else:
+            sensor_type = None
+        # logger.info("sensor_type {}".format(sensor_type))
         return sensor_type
 
     async def set_lcd_sensortype_for_sensor_mode(self):
+        # this mode should be used if you are not using avollkopf version of cbpi4-ui
         sensor_type = self.cbpi.config.get('LCD_Display_Sensortype', None)
         if sensor_type is None:
             try:
@@ -603,8 +632,7 @@ class LCDisplay(CBPiExtension):
         try:
             step_json_obj = self.cbpi.step.get_state()
             steps = step_json_obj['steps']
-            # if DEBUG: logger.info("steps %s" % steps)
-            # if DEBUG: logger.info("indices %s" % str(len(steps)))
+
             i = 0
             result = 'no active step'
             while i < len(steps):
@@ -672,28 +700,37 @@ class LCDisplay(CBPiExtension):
 
     pass
 
-    async def get_sensor_values(self, sensortype):  # todo not used,
+    async def get_sensor_values_by_id(self, sensor_id):
         try:
             sensor_json_obj = self.cbpi.sensor.get_state()
             sensors = sensor_json_obj['data']
-            if DEBUG: logger.info("sensors %s" % sensors)
+            # if DEBUG: logger.info("sensors %s" % sensors)
             i = 0
             while i < len(sensors):
-                if sensors[i]["type"] == sensortype:
-                    # sensortype = (sensors[i]["type"])
+                if sensors[i]["id"] == sensor_id:
+                    sensor_type = (sensors[i]["type"])
                     sensor_name = (sensors[i]["name"])
-                    sensor_id = (sensors[i]['id'])
-                    logger.info("sensor Values: sensor_name {}".format(sensor_name))
-                    logger.info("sensor Values: sensor_props {}".format(sensors[i]["props"]))
+                    # sensor_id = (sensors[i]['id'])
+                    sensor_props = (sensors[i]["props"])
                     sensor_value = self.cbpi.sensor.get_sensor_value(sensor_id).get('value')
-                    logger.info("sensor Values: sensor_value {}".format(sensor_value))
+                    return {'sensor_id': sensor_id,
+                            'sensor_name': sensor_name,
+                            'sensor_type': sensor_type,
+                            'sensor_value': sensor_value,
+                            'sensor_props': sensor_props}
                 else:
+
                     pass
                 pass
                 i = i + 1
             pass
         except Exception as e:
             logger.info(e)
+            return {'sensor_id': 'error',
+                    'sensor_name': 'error',
+                    'sensor_type': 'error',
+                    'sensor_value': 'error',
+                    'sensor_props': 'error'}
         pass
         await asyncio.sleep(1)
 
