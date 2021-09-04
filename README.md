@@ -35,7 +35,7 @@ Then execute the commands in the raspi command box:
 ```python
 sudo git clone https://github.com/JamFfm/cbpi4-LCDisplay
 sudo chown -R pi /home/pi/cbpi4/cbpi4-LCDisplay
-sudo cbpi create cbpi4-LCDisplay
+sudo cbpi create LCDisplay
 cd cbpi4-LCDisplay
 sudo pip3 install -e ./cbpi4-LCDisplay
 cbpi add cbpi4-LCDisplay
