@@ -49,6 +49,17 @@ Your user has to have permissions to write in the filesysten. This is usually th
 
 A reboot is necessary.
 
+
+There is another way to install like:
+sudo pip3 install https://github.com/JamFfm/cbpi4-LCDisplay/archive/main.zip
+
+but this one installs in 
+/usr/local/lib/python3.7/dist-packages/cbpi4-LCDisplay/*
+This is not handy if you need to have assess to the code.
+I do not recomend.
+
+The installation via pip in work in progress!
+
 ## Configuration
 
 At least configure your i2c address in the settings menu. Have a look at this documentation.
