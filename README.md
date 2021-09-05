@@ -58,7 +58,7 @@ but this one installs in
 This is not handy if you need to have assess to the code.
 I do not recomend.
 
-The installation via pip in work in progress!
+**The installation via pip is work in progress!**
 
 ## Configuration
 
