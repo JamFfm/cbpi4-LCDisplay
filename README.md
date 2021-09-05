@@ -56,9 +56,9 @@ sudo pip3 install https://github.com/JamFfm/cbpi4-LCDisplay/archive/main.zip
 but this one installs in 
 /usr/local/lib/python3.7/dist-packages/cbpi4-LCDisplay/*
 This is not handy if you need to have assess to the code.
-I do not recomend.
+I do not recomend now. But this seems to be the desired folder to install via pip package.
 
-**The installation via pip is work in progress!**
+**The installation via pip package is work in progress!**
 
 ## Configuration
 
