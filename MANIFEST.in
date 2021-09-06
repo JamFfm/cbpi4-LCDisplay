@@ -1,2 +1,2 @@
-include LCDisplay/config.yaml
-recursive-include LCDisplay/static *
+include cbpi4-LCDisplay/config.yaml
+recursive-include cbpi4-LCDisplay/static *
