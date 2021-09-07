@@ -1,0 +1,12 @@
+MANIFEST.in
+README.md
+setup.py
+cbpi4-LCDisplay/__init__.py
+cbpi4-LCDisplay/config.yaml
+cbpi4-LCDisplay/static/cbpi.png
+cbpi4-LCDisplay/static/index.html
+cbpi4-LCDisplay/static/style.css
+cbpi4_LCDisplay.egg-info/PKG-INFO
+cbpi4_LCDisplay.egg-info/SOURCES.txt
+cbpi4_LCDisplay.egg-info/dependency_links.txt
+cbpi4_LCDisplay.egg-info/top_level.txt

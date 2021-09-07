@@ -1,8 +1,7 @@
 from setuptools import setup, find_packages
-
-# read the contents of your README file
 from os import path
 
+# read the contents of your README file
 this_directory = path.abspath(path.dirname(__file__))
 with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
     long_description = f.read()
@@ -22,8 +21,8 @@ setup(name='cbpi4-LCDisplay',
           'cbpi4-LCDisplay': ['*', '*.txt', '*.rst', '*.yaml']},
       # packages=['cbpi4-LCDisplay'],
       install_requires=[
-          'cbpi>=4.0.0.33',
-          'smbus2',
+            'cbpi>=4.0.0.33',
+            'smbus2',
       ],
       long_description=long_description,
       long_description_content_type='text/markdown'
