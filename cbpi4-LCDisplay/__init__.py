@@ -13,7 +13,7 @@ from cbpi.api.config import ConfigType
 # from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS #  todo
 import cbpi.api.dataclasses as dataclasses  # includes NotificationType like INFO, WARNING, ERROR, SUCCESS #  todo
 
-# LCDisplay VERSION = '5.0.08'
+# LCDisplay VERSION = '5.0.8'
 #
 # this plug in is made for CBPI4. Do not use it in CBPI3.
 # The LCD-library and LCD-driver are taken from RPLCD Project version 1.0. The documentation:
@@ -38,7 +38,7 @@ import cbpi.api.dataclasses as dataclasses  # includes NotificationType like INF
 # set_lcd_sensortype_for_sensor_mode1 into set_lcd_sensortype_for_sensor_mode.
 
 logger = logging.getLogger(__name__)
-DEBUG = False  # turn True to show (much) more debug info in app.log
+DEBUG = True  # turn True to show (much) more debug info in app.log
 BLINK = False  # start value for blinking the beerglass during heating only for single mode
 global lcd
 # beerglass symbol
@@ -465,7 +465,7 @@ class LCDisplay(CBPiExtension):
             ip_addr = socket.inet_ntoa(
                 fcntl.ioctl(so.fileno(), 0x8915, struct.pack('256s', bytes(interface.encode())[:15]))[20:24])
         except Exception as e:
-            logger.warning('LCDisplay - get_ip no ip found')
+            logger.warning('no ip found')
             if DEBUG: logger.warning(e)
             return ip_addr
         finally:
@@ -476,7 +476,7 @@ class LCDisplay(CBPiExtension):
         try:
             brewery = self.cbpi.config.get("BREWERY_NAME", None)
         except Exception as e:
-            logger.warning('LCDisplay - get_breweryname no breweryname found')
+            logger.warning('no breweryname found')
             logger.warning(e)
             brewery = "no name"
         pass
@@ -491,7 +491,7 @@ class LCDisplay(CBPiExtension):
                 logger.info("LCD_Address added")
                 lcd_address = self.cbpi.config.get("LCD_Address", None)
             except Exception as e:
-                logger.warning('LCDisplay - set_lcd_address Unable to update config')
+                logger.warning('Unable to update config')
                 logger.warning(e)
             pass
         pass
@@ -507,7 +507,7 @@ class LCDisplay(CBPiExtension):
                                            [{"label": "A00", "value": "A00"}, {"label": "A02", "value": "A02"}])
                 lcd_charmap = self.cbpi.config.get("LCD_Charactermap", None)
             except Exception as e:
-                logger.warning('LCDisplay - set_lcd_charmap Unable to update config')
+                logger.warning('Unable to update config')
                 logger.warning(e)
             pass
         pass
@@ -730,4 +730,8 @@ class LCDisplay(CBPiExtension):
                     'sensor_value': 'error',
                     'sensor_props': 'error'}
         pass
- 
+        await asyncio.sleep(1)
+
+
+def setup(cbpi):
+    cbpi.plugin.register("LCDisplay", LCDisplay)
