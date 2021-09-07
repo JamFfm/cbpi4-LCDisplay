@@ -16,13 +16,13 @@ setup(name='cbpi4-LCDisplay',
       packages=find_packages(),
       include_package_data=True,
       package_data={
-        # If any package contains *.txt or *.rst files, include them:
-      '': ['*.txt', '*.rst', '*.yaml'],
-      'cbpi4-LCDisplay': ['*','*.txt', '*.rst', '*.yaml']},
+          # If any package contains *.txt or *.rst files, include them:
+      	  '': ['*.txt', '*.rst', '*.yaml'],
+      	  'cbpi4-LCDisplay': ['*','*.txt', '*.rst', '*.yaml']},
       # packages=['cbpi4-LCDisplay'],
-	    install_requires=[
-            'cbpi>=4.0.0.33',
-	    'smbus2',
+      install_requires=[
+          'cbpi>=4.0.0.33',
+	  'smbus2',
       ],
       long_description=long_description,
       long_description_content_type='text/markdown'
