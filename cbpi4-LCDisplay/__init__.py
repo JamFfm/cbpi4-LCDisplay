@@ -10,8 +10,8 @@ from time import strftime
 from cbpi.api import *
 from cbpi.api.config import ConfigType
 
-# from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS #  todo
-import cbpi.api.dataclasses as dataclasses  # includes NotificationType like INFO, WARNING, ERROR, SUCCESS #  todo
+# from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS #  TODO
+# import cbpi.api.dataclasses as dataclasses  # includes NotificationType like INFO, WARNING, ERROR, SUCCESS #  todo
 
 # LCDisplay VERSION = '5.0.8'
 #
@@ -38,7 +38,7 @@ import cbpi.api.dataclasses as dataclasses  # includes NotificationType like INF
 # set_lcd_sensortype_for_sensor_mode1 into set_lcd_sensortype_for_sensor_mode.
 
 logger = logging.getLogger(__name__)
-DEBUG = True  # turn True to show (much) more debug info in app.log
+DEBUG = False  # turn True to show (much) more debug info in app.log
 BLINK = False  # start value for blinking the beerglass during heating only for single mode
 global lcd
 # beerglass symbol
@@ -264,7 +264,7 @@ class LCDisplay(CBPiExtension):
             # line1 the stepname
             line1 = ("%s" % step_name).ljust(20)
 
-            # line2 when steptimer is running show remaining time and kettlename
+            # line2 if steptimer is running show remaining time and kettlename together
             if is_timer_running is True:
                 line2 = (("%s %s" % (kettle_name.ljust(12)[:11], remaining_time)).ljust(20)[:20])
                 pass
@@ -288,6 +288,7 @@ class LCDisplay(CBPiExtension):
                 line4 = "                    "[:20]
             pass
         else:
+            # no string "boil" in stepname detected
             # line1 the stepname
             line1 = ('%s' % step_name.ljust(20)[:20])
 
