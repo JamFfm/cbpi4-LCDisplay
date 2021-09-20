@@ -5,7 +5,7 @@ import fcntl
 import struct
 import logging
 import asyncio
-from .RPLCD.i2c import CharLCD
+from RPLCD.i2c import CharLCD
 from time import strftime
 from cbpi.api import *
 from cbpi.api.config import ConfigType
@@ -13,11 +13,13 @@ from cbpi.api.config import ConfigType
 # from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS #  TODO
 # import cbpi.api.dataclasses as dataclasses  # includes NotificationType like INFO, WARNING, ERROR, SUCCESS #  todo
 
-# LCDisplay VERSION = '5.0.8'
+# LCDisplay VERSION = '5.0.9'
 #
 # this plug in is made for CBPI4. Do not use it in CBPI3.
-# The LCD-library and LCD-driver are taken from RPLCD Project version 1.0. The documentation:
+# The LCD-library and LCD-driver are taken from RPLCD Project version 1.3.0. The documentation:
 # http://rplcd.readthedocs.io/en/stable/ very good and readable. Git is here: https://github.com/dbrgn/RPLCD.
+# The package should be installed automatically. If not install it manually: sudo pip3 install RPLCD
+#
 # LCD_Address should be something like 0x27, 0x3f etc.
 # See in Craftbeerpi-UI (webpage of CBPI4) settings .
 # To determine address of LCD use command prompt in Raspi and type in:
@@ -36,6 +38,11 @@ from cbpi.api.config import ConfigType
 # set_lcd_sensortype_for_sensor_mode to set_lcd_sensortype_for_sensor_mode2
 # and change
 # set_lcd_sensortype_for_sensor_mode1 into set_lcd_sensortype_for_sensor_mode.
+# 20.09.2021 removed RPLCD source files. Instead the package has to be installed. This is done by
+# pipy related installation of plugin:
+# goto folder where CBPI4 is installed (at least the config folder)
+# sudo pip3 install cbpi4-LCDisplay
+# sudo cbpi add cbpi4-LCDisplay
 
 logger = logging.getLogger(__name__)
 DEBUG = False  # turn True to show (much) more debug info in app.log
