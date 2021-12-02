@@ -9,6 +9,7 @@ from RPLCD.i2c import CharLCD
 from time import strftime
 from cbpi.api import *
 from cbpi.api.config import ConfigType
+# from cbpi.api.dataclasses import NotificationAction, NotificationType
 
 # from cbpi.api.dataclasses import NotificationType  # INFO, WARNING, ERROR, SUCCESS #  TODO
 # import cbpi.api.dataclasses as dataclasses  # includes NotificationType like INFO, WARNING, ERROR, SUCCESS #  todo
@@ -34,13 +35,15 @@ from cbpi.api.config import ConfigType
 # 15.05.2021 added multimode
 # 16.05.2021 added sensormode
 # 05.06.2021 added function to select a sensor via GUI (craftbeerpi4-ui enhancement from avollkopf necessary)
-# and sensormode shows all sensors of same sensortype. To activate this function please change
+# and sensormode shows all sensors of same sensortype. This is activated by default now.
+# To activate this function with Maunels repo please change
 # set_lcd_sensortype_for_sensor_mode to set_lcd_sensortype_for_sensor_mode2
 # and change
 # set_lcd_sensortype_for_sensor_mode1 into set_lcd_sensortype_for_sensor_mode.
 # 20.09.2021 removed RPLCD source files. Instead the package has to be installed. This is done by
+#
 # pipy related installation of plugin:
-# goto folder where CBPI4 is installed (at least the config folder)
+# goto folder where CBPI4 is installed (at least the folder which is containing the config folder)
 # sudo pip3 install cbpi4-LCDisplay
 # sudo cbpi add cbpi4-LCDisplay
 
@@ -134,20 +137,19 @@ class LCDisplay(CBPiExtension):
         try:
             lcd = CharLCD(i2c_expander='PCF8574', address=address, port=1, cols=20, rows=4, dotsize=8, charmap=charmap,
                           auto_linebreaks=True, backlight_enabled=True)
-            lcd.create_char(0, bierkrug)    # u"\x00"  -->beerglass symbol
-            lcd.create_char(1, cool)        # u"\x01"  -->Ice symbol
-            lcd.create_char(2, awithdots)   # u"\x02"  -->Ä
-            lcd.create_char(3, owithdots)   # u"\x03"  -->Ö
-            lcd.create_char(4, uwithdots)   # u"\x04"  -->Ü
-            lcd.create_char(5, esszett)     # u"\x05"  -->ß
+            lcd.create_char(0, bierkrug)  # u"\x00"  -->beerglass symbol
+            lcd.create_char(1, cool)  # u"\x01"  -->Ice symbol
+            lcd.create_char(2, awithdots)  # u"\x02"  -->Ä
+            lcd.create_char(3, owithdots)  # u"\x03"  -->Ö
+            lcd.create_char(4, uwithdots)  # u"\x04"  -->Ü
+            lcd.create_char(5, esszett)  # u"\x05"  -->ß
             if DEBUG: logger.info('LCDisplay - Info: LCD object set')
         except Exception as e:
             if DEBUG: logger.info('LCDisplay - Error: LCD object not set or wrong LCD address or LCD Module not '
                                   'properly connected or LCD module is defect: {}'.format(e))
-            # ToDo
             # self.cbpi.notify('LCDisplay:', 'LCD Address is wrong. You have to choose a different LCD Address. Key in '
-            #                                'at Raspi prompt: sudo i2cdetect -y 1 or sudo i2cdetect -y 0',
-            #                  dataclasses.NotificationType.ERROR)
+            #                               'at Raspi prompt: sudo i2cdetect -y 1 or sudo i2cdetect -y 0',
+            #                 NotificationType.ERROR)
         pass
 
         refresh = await self.set_lcd_refresh()
@@ -223,6 +225,11 @@ class LCDisplay(CBPiExtension):
     async def show_singledisplay(self, kettle_id, charmap="A00", refresh_time=1.0, multidisplay=False):
 
         # what if kettle_id ="" like a forgotten settings entry?  # todo
+        # get default Kettle from Settings
+        if kettle_id is None or kettle_id is "":
+            kettle_id = self.cbpi.config.get('MASH_TUN', None)
+        pass
+
         steps = await self.get_active_step_values()
         step_name1 = steps['active_step_name']
         step_name = await self.cbidecode(step_name1, charmap)
@@ -387,7 +394,8 @@ class LCDisplay(CBPiExtension):
                         await asyncio.sleep(refresh_time)
                     i = i + 1
                     # Todo if there is no match to sensortype of any sensor there need to be a sleep. Otherwise this is
-                    #  constantly running with no sleep at all. Blocks the website. Unlikely that this will happen
+                    #  constantly running with no sleep at all. Blocks the website.
+                    #  Unlikely that this condition will happen
                 pass
             except Exception as e:
                 logger.info(e)
@@ -557,13 +565,14 @@ class LCDisplay(CBPiExtension):
         pass
         return mode
 
-    async def set_lcd_sensortype_for_sensor_mode1(self):
+    async def set_lcd_sensortype_for_sensor_mode(self):
         # this mode is the desired mode but requires avollkopfs craftbeerpi4-ui
         # avollkopfs repository is highly recommended to use
         sensor_id = self.cbpi.config.get('LCD_Display_Sensortype', None)  # this is only Sensor ID not type
         if sensor_id is None:
             try:
-                await self.cbpi.config.add('LCD_Display_Sensortype', '', ConfigType.SENSOR,
+                await self.cbpi.config.add('LCD_Display_Sensortype', 'OneWire', ConfigType.SENSOR,
+                                           'ONLY use with this fork: https://github.com/avollkopf/craftbeerpi4, '
                                            'select a sensor which is representing the sensortype you want to monitor '
                                            'in LCD, consult readme, '
                                            'NO! CBPi reboot required')
@@ -582,7 +591,7 @@ class LCDisplay(CBPiExtension):
         # logger.info("sensor_type {}".format(sensor_type))
         return sensor_type
 
-    async def set_lcd_sensortype_for_sensor_mode(self):
+    async def set_lcd_sensortype_for_sensor_mode1(self):
         # this mode should be used if you are not using avollkopf version of cbpi4-ui
         sensor_type = self.cbpi.config.get('LCD_Display_Sensortype', None)
         if sensor_type is None:
@@ -591,13 +600,13 @@ class LCDisplay(CBPiExtension):
                                            'select the type of sensors to be displayed in LCD, consult readme, '
                                            'NO! CBPi reboot required',
                                            [{"label": "OneWire", "value": 'OneWire'},
-                                            {"label": "iSpindel", "value": 'iSpindel'},
-                                            {"label": "MQTT_SENSOR", "value": 'MQTT_SENSOR'},
-                                            {"label": "iSpindel", "value": 'iSpindel'},
+                                            {"label": "iSpindle", "value": 'iSpindle'},
+                                            {"label": "MQTTSensor", "value": 'MQTTSensor'},
                                             {"label": "eManometer", "value": 'eManometer'},
-                                            {"label": "PHSensor", "value": 'PHSensor'},
-                                            {"label": "Http_Sensor", "value": 'Http_Sensor'},
-                                            {"label": "CustomSensor", "value": 'CustomSensor'}])
+                                            {"label": "phSensorADS1x15", "value": 'phSensorADS1x15'},
+                                            {"label": "HTTPSensor", "value": 'HTTPSensor'},
+                                            {"label": "CustomSensor", "value": 'CustomSensor'},
+                                            {"label": "HX711 Load Cell", "value": 'HX711 Load Cell'}])
                 logger.info("LCD_Display_Sensortype added")
                 sensor_type = self.cbpi.config.get('LCD_Display_Sensortype', None)
             except Exception as e:
