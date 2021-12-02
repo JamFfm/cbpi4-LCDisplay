@@ -141,11 +141,12 @@ will be displayed.** Otherwise the display of a boil type step looks the same as
 - E.g. a iSpindel sensor can display temperature, gravity, battery etc. These values with 
 corresponding sensor name is shown.
 - The sensortype to be displayed is changed in settings section.
+- Only use this configuration when using avollkopfs fork of cbpi4: https://github.com/avollkopf/craftbeerpi4.
+
+- If you use original cbpi4 from Manuel you can have a look at the commands in the beginning of__init__ file.
 - If there is a missing sensor like from a future addon it can be added by typing in the code of function
-"set_sensortype_for_sensor_mode" in the init.py file. 
-- If you use the fork of avollkopf you can have a look at the commands in the beginning of__init__ file.
-- there is only OneWire and CustomSensor functioning (even some more are selectable)
-- This is fixed in the future when ConfigType.SENSOR ist fixed by Manuel (avollkopf did it already)
+"set_sensortype_for_sensor_mode1" in the init.py file. 
+there is only OneWire and CustomSensor functional (even some more are selectable).
 
 
 
