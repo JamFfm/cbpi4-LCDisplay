@@ -21,7 +21,6 @@ setup(name='cbpi4-LCDisplay',
       # packages=['cbpi4-LCDisplay'],
       packages=find_packages(),
       install_requires=[
-            'cbpi>=4.0.0.33',
             'smbus2',
             'RPLCD',
       ],
