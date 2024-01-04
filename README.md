@@ -214,7 +214,7 @@ Here you can change the kettle to be displayed in single mode.
 
 - This is running in python3
 - Changing an LCD_xxxx parameter in the parameters menu or any
-file in LCDDisplay folder usually requires a reboot.
+file in LCDisplay folder usually requires a reboot.
 - Whenever you need a reboot, have a look in the comments of the parameters.
 - Future: A new fermenter should have a target temperature and at least one step defined.
 - Future: Maybe it is necessary to restart craftbeerpi after adding a new fermenter. 
@@ -223,13 +223,15 @@ file in LCDDisplay folder usually requires a reboot.
   - try to adjust contrast by the screw on the back of the LCD Hardware (I2C Module)
   - be sure to provide the LCD hardware with the right amount of voltage (mostly 5V or 3.3V)
   - use a strong power-supply. If you notice LCD fading, there is a lack of current.
+  - the LCD needs same ground like Raspi. Otherwise i2c does not detect the i2c device (took me a day to find out). 
   - use proper connections. Soldering the wires is best for connection. Bad connection can also result in fading the LCD.
 
 
 ## Known Problems
-The LCD hardware does not like temperature below 0°C (32°F). 
+The LCD hardware does not like temperature below 0°C (32°F).
 It becomes slow and can be damaged like brightness is no more homogenous throughout the hole LCD area.
-Fermenters are not implemented as they are not implemented in CBPI4 until now (10-2021)
+Fermenters are not implemented as they are not implemented in CBPI4 until now (10-2021). 
+If you need Fermenter in combination with fermenter have a look at https://github.com/PiBrewing/cbpi4-LCDisplay.
 
 
 ## Questions  
