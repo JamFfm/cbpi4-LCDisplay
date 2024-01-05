@@ -26,6 +26,12 @@ Ensure to activate the I2C connection in Raspi configuration.
 
 ### Software installation: ###
 
+Look at  https://openbrewing.gitbook.io/craftbeerpi4_support/readme/plugin-installation.
+I can't explain that any better.
+The following description may still work for Raspi OS before Bookwom.
+For Bookworm goto Configuration after installing
+
+
 #### Software installation via pypi (recommended) ####
 
 This is the official installation via PyPI like Manuel83 (the developer) intended.\
