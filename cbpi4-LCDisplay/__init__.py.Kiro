@@ -1,0 +1,656 @@
+# -*- coding: utf-8 -*-
+import time
+import socket
+import fcntl
+import struct
+import logging
+import asyncio
+from RPLCD.i2c import CharLCD
+from time import strftime
+from cbpi.api import *
+from cbpi.api.config import ConfigType
+
+# LCDisplay VERSION = '5.1.0'
+#
+# Dieses Plugin ist für CBPI4 gemacht. Nicht mit CBPI3 verwenden.
+# Die LCD-Bibliothek stammt aus dem RPLCD-Projekt v1.3.0:
+#   Doku: http://rplcd.readthedocs.io/en/stable/
+#   Git:  https://github.com/dbrgn/RPLCD
+# Installation falls nötig: sudo pip3 install RPLCD
+#
+# LCD_Address: z.B. 0x27 oder 0x3f  → in den CBPI4-Einstellungen konfigurieren
+# Adresse ermitteln: sudo i2cdetect -y 1  (oder -y 0)
+#
+# Erstellt von JamFfm
+# Optimiert: 2024 – globale Variablen entfernt, for-Schleifen, IP-Caching,
+#            Hilfsmethode _write_lcd, Socket-Cleanup, redundante pass/Globals entfernt
+
+logger = logging.getLogger(__name__)
+DEBUG = False  # True → mehr Debug-Ausgaben in app.log
+
+# ---------------------------------------------------------------------------
+# Benutzerdefinierte LCD-Zeichen (für A00-Zeichensatz)
+# ---------------------------------------------------------------------------
+# Bierkrug-Symbol (Heizung aktiv)
+bierkrug = (
+    0b11100,
+    0b00000,
+    0b11100,
+    0b11111,
+    0b11101,
+    0b11101,
+    0b11111,
+    0b11100,
+)
+# Schneeflocke / Stern (Kühlung aktiv)
+cool = (
+    0b00100,
+    0b10101,
+    0b01110,
+    0b11111,
+    0b01110,
+    0b10101,
+    0b00100,
+    0b00000,
+)
+# Ä (fehlt im A00-Zeichensatz)
+awithdots = (
+    0b10001,
+    0b01110,
+    0b10001,
+    0b10001,
+    0b11111,
+    0b10001,
+    0b10001,
+    0b00000,
+)
+# Ö (fehlt im A00-Zeichensatz)
+owithdots = (
+    0b10001,
+    0b01110,
+    0b10001,
+    0b10001,
+    0b10001,
+    0b10001,
+    0b01110,
+    0b00000,
+)
+# Ü (fehlt im A00-Zeichensatz)
+uwithdots = (
+    0b01010,
+    0b10001,
+    0b10001,
+    0b10001,
+    0b10001,
+    0b10001,
+    0b01110,
+    0b00000,
+)
+# ß (fehlt im A00-Zeichensatz)
+esszett = (
+    0b00000,
+    0b00000,
+    0b11100,
+    0b10010,
+    0b10100,
+    0b10010,
+    0b11100,
+    0b10000,
+)
+
+
+class LCDisplay(CBPiExtension):
+    """CBPI4-Plugin zur Anzeige von Brau-Zuständen auf einem 20×4 I2C-LCD."""
+
+    def __init__(self, cbpi):
+        self.cbpi = cbpi
+        self.lcd = None            # LCD-Objekt als Instanzattribut (kein global)
+        self._blink = False        # Blink-Zustand für Single-Modus (kein global)
+        self._task = asyncio.create_task(self.run())
+
+    # ------------------------------------------------------------------
+    # Hilfsmethode: alle vier LCD-Zeilen auf einmal schreiben
+    # ------------------------------------------------------------------
+    def _write_lcd(self, line1, line2, line3, line4):
+        """Schreibt vier Zeilen auf das LCD. Jede Zeile wird auf 20 Zeichen
+        aufgefüllt bzw. abgeschnitten, damit keine Artefakte bleiben."""
+        if self.lcd is None:
+            return
+        self.lcd._set_cursor_mode('hide')
+        for row, text in enumerate((line1, line2, line3, line4)):
+            self.lcd.cursor_pos = (row, 0)
+            self.lcd.write_string(text[:20].ljust(20))
+
+    # ------------------------------------------------------------------
+    # Haupt-Task
+    # ------------------------------------------------------------------
+    async def run(self):
+        logger.info('LCDisplay - Info: Hintergrundtask gestartet')
+
+        # Konfiguration einmalig beim Start einlesen / anlegen
+        lcd_address_str = await self.set_lcd_address()
+        logger.info('LCDisplay - LCD Adresse: %s', lcd_address_str)
+
+        charmap = await self.set_lcd_charmap()
+        logger.info('LCDisplay - LCD Zeichensatz: %s', charmap)
+
+        # LCD initialisieren
+        try:
+            address = int(lcd_address_str, 16)
+            self.lcd = CharLCD(
+                i2c_expander='PCF8574',
+                address=address,
+                port=1,
+                cols=20,
+                rows=4,
+                dotsize=8,
+                charmap=charmap,
+                auto_linebreaks=True,
+                backlight_enabled=True,
+            )
+            self.lcd.create_char(0, bierkrug)   # \x00 → Bierkrug
+            self.lcd.create_char(1, cool)        # \x01 → Kühlung
+            self.lcd.create_char(2, awithdots)   # \x02 → Ä
+            self.lcd.create_char(3, owithdots)   # \x03 → Ö
+            self.lcd.create_char(4, uwithdots)   # \x04 → Ü
+            self.lcd.create_char(5, esszett)     # \x05 → ß
+            if DEBUG:
+                logger.debug('LCDisplay - LCD-Objekt erfolgreich erstellt')
+        except Exception as e:
+            logger.error('LCDisplay - LCD konnte nicht initialisiert werden '
+                         '(falsche Adresse oder Hardwarefehler): %s', e)
+
+        # Weitere Einstellungen anlegen, falls noch nicht vorhanden
+        await self.set_lcd_refresh()
+        await self.set_lcd_display_mode()
+        await self.set_lcd_kettle_for_single_mode()
+        await self.set_lcd_sensortype_for_sensor_mode()
+
+        logger.info('LCDisplay - Einstellungen geladen, starte Anzeigeschleife')
+
+        # ------------------------------------------------------------------
+        # Hauptschleife
+        # ------------------------------------------------------------------
+        while True:
+            display_mode = await self.set_lcd_display_mode()
+            refresh      = await self.set_lcd_refresh()
+            active_step  = await self.get_active_step_values()
+
+            if active_step != 'no active step':
+                if display_mode == 'Multidisplay':
+                    await self.show_multidisplay(refresh, charmap)
+                elif display_mode == 'Singledisplay':
+                    single_kettle_id = await self.set_lcd_kettle_for_single_mode()
+                    await self.show_singledisplay(single_kettle_id, charmap)
+                elif display_mode == 'Sensordisplay':
+                    sensortype = await self.set_lcd_sensortype_for_sensor_mode()
+                    await self.show_sensordisplay(sensortype, refresh, charmap)
+                else:
+                    await self.show_standby()
+            else:
+                await self.show_standby()
+
+    # ------------------------------------------------------------------
+    # Standby-Anzeige (kein aktiver Brauschritt)
+    # ------------------------------------------------------------------
+    async def show_standby(self):
+        ip           = await self.get_ip_address()
+        cbpi_version = await self.get_cbpi_version()
+        breweryname  = await self.get_breweryname()
+        timestamp    = strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+        self._write_lcd(
+            f"CBPI       {cbpi_version}",
+            breweryname,
+            f"IP: {ip}",
+            timestamp,
+        )
+        await asyncio.sleep(1)
+
+    # ------------------------------------------------------------------
+    # Multidisplay: alle Kessel nacheinander anzeigen
+    # ------------------------------------------------------------------
+    async def show_multidisplay(self, refresh_time=2.0, charmap="A00"):
+        kettles = self.cbpi.kettle.get_state().get('data', [])
+        for kettle in kettles:
+            try:
+                await self.show_singledisplay(
+                    kettle["id"], charmap, refresh_time, multidisplay=True
+                )
+            except Exception as e:
+                logger.error('LCDisplay - Fehler im Multidisplay: %s', e)
+
+    # ------------------------------------------------------------------
+    # Singledisplay: einen Kessel anzeigen
+    # ------------------------------------------------------------------
+    async def show_singledisplay(self, kettle_id, charmap="A00",
+                                  refresh_time=1.0, multidisplay=False):
+        # Fallback: MASH_TUN-Kessel aus Einstellungen
+        if not kettle_id:
+            kettle_id = self.cbpi.config.get('MASH_TUN', None)
+
+        # Schritt-Informationen
+        steps        = await self.get_active_step_values()
+        step_name    = await self.cbidecode(steps['active_step_name'], charmap)
+        steps_props  = steps['active_step_probs']
+        remaining_time = steps['active_step_state_text'].replace("Status: ", "")
+
+        # Kessel-Informationen
+        kettlevalues       = await self.get_kettle_values(kettle_id)
+        kettle_name        = await self.cbidecode(kettlevalues['kettle_name'], charmap)
+        kettle_target_temp = kettlevalues['kettle_target_temp']
+        kettle_sensor_id   = kettlevalues['kettle_sensor_id']
+
+        kettle = self.cbpi.kettle.find_by_id(kettle_id)
+        heater = self.cbpi.actor.find_by_id(kettle.heater)
+        heater_on = heater.instance.state
+
+        sensor_value = self.cbpi.sensor.get_sensor_value(kettle_sensor_id).get('value')
+        lcd_unit     = await self.get_cbpi_temp_unit()
+
+        # Timer-Status bestimmen
+        if "Waiting for Target Temp" in remaining_time:
+            remaining_time = "Wait"
+            is_timer_running = False
+        elif not remaining_time:          # leer oder None
+            is_timer_running = False
+        else:
+            is_timer_running = True
+
+        # Zeileninhalt je nach Schritt-Typ (Kochen vs. Maischen)
+        is_boil = "boil" in step_name.lower()
+
+        if is_boil:
+            # Hop-Timer berechnen
+            try:
+                time_left = sum(
+                    x * int(t)
+                    for x, t in zip([3600, 60, 1], remaining_time.split(":"))
+                )
+                next_hop_alert = await self.get_next_hop_timer(steps_props, time_left)
+            except Exception:
+                next_hop_alert = None
+
+            line1 = step_name
+            line2 = (
+                f"{kettle_name[:11].ljust(11)} {remaining_time}"
+                if is_timer_running
+                else kettle_name
+            )
+            try:
+                line3 = (
+                    f"Set|Act:{float(kettle_target_temp):4.0f}\xb0"
+                    f"{float(sensor_value):5.1f}\xb0{lcd_unit}"
+                )
+            except (ValueError, TypeError):
+                line3 = f"Set|Act:{float(kettle_target_temp):4.0f}\xb0 n.a \xb0{lcd_unit}"
+
+            line4 = f"Add Hop in: {next_hop_alert}" if next_hop_alert else ""
+
+        else:
+            line1 = step_name
+            line2 = (
+                f"{kettle_name[:11].ljust(11)} {remaining_time}"
+                if is_timer_running
+                else kettle_name
+            )
+            line3 = f"Targ. Temp:{float(kettle_target_temp):6.2f}\xb0{lcd_unit}"
+            try:
+                line4 = f"Curr. Temp:{float(sensor_value):6.2f}\xb0{lcd_unit}"
+            except (ValueError, TypeError):
+                line4 = "Curr. Temp: No Data"
+
+        # LCD beschreiben
+        self._write_lcd(line1, line2, line3, line4)
+
+        # Bierkrug-Symbol in Zeile 1, Spalte 19 (Heizungs-Indikator)
+        if self.lcd is not None:
+            self.lcd.cursor_pos = (0, 19)
+            if multidisplay:
+                # Multimodus: Symbol leuchtet konstant wenn Heizung an
+                self.lcd.write_string("\x00" if heater_on else " ")
+            else:
+                # Singlemodus: Symbol blinkt wenn Heizung an
+                if heater_on and not self._blink:
+                    self.lcd.write_string("\x00")
+                    self._blink = True
+                else:
+                    self.lcd.write_string(" ")
+                    self._blink = False
+
+        await asyncio.sleep(refresh_time)
+
+    # ------------------------------------------------------------------
+    # Sensordisplay: alle Sensoren eines Typs anzeigen
+    # ------------------------------------------------------------------
+    async def show_sensordisplay(self, sensortype, refresh_time=1.0, charmap="A00"):
+        if sensortype is None:
+            self._write_lcd(
+                'CBPi4 LCD Sensormode',
+                '--------------------',
+                'no sensor selected',
+                'or defined',
+            )
+            await asyncio.sleep(refresh_time)
+            return
+
+        try:
+            sensors = self.cbpi.sensor.get_state().get('data', [])
+            matched = False
+            for sensor in sensors:
+                if sensor["type"] != sensortype:
+                    continue
+                matched = True
+                sensor_name  = await self.cbidecode(sensor['name'], charmap)
+                sensor_value = self.cbpi.sensor.get_sensor_value(sensor['id']).get('value')
+
+                self._write_lcd(
+                    'CBPi4 LCD Sensormode',
+                    '--------------------',
+                    sensor_name,
+                    str(sensor_value),
+                )
+                await asyncio.sleep(refresh_time)
+
+            # Kein Sensor des gewählten Typs gefunden → kurz warten
+            if not matched:
+                await asyncio.sleep(refresh_time)
+
+        except Exception as e:
+            logger.warning('LCDisplay - Fehler im Sensordisplay: %s', e)
+            await asyncio.sleep(refresh_time)
+
+    # ------------------------------------------------------------------
+    # Hop-Timer: nächste Hopfen-Zugabe berechnen
+    # ------------------------------------------------------------------
+    async def get_next_hop_timer(self, active_step, time_left):
+        hop_timers = []
+        for x in range(1, 6):
+            try:
+                hop_minutes = int(active_step[f'Hop_{x}'])
+                hop_seconds = hop_minutes * 60
+                hop_left    = time_left - hop_seconds
+                if hop_left > 0:
+                    hop_timers.append(hop_left)
+                    if DEBUG:
+                        logger.debug('LCDisplay - Hop %d: %s', x, hop_timers)
+            except (KeyError, ValueError, TypeError):
+                pass  # Hop nicht gesetzt → ignorieren
+
+        if hop_timers:
+            return time.strftime("%H:%M:%S", time.gmtime(min(hop_timers)))
+        return None
+
+    # ------------------------------------------------------------------
+    # CBPI4-Hilfsmethoden
+    # ------------------------------------------------------------------
+    async def get_cbpi_version(self):
+        try:
+            return self.cbpi.version
+        except Exception as e:
+            logger.warning('LCDisplay - CBPI-Version nicht gefunden: %s', e)
+            return "n/a"
+
+    async def get_cbpi_temp_unit(self):
+        try:
+            return self.cbpi.config.get("TEMP_UNIT", None) or "C"
+        except Exception as e:
+            logger.warning('LCDisplay - Temperatureinheit nicht gefunden: %s', e)
+            return "C"
+
+    async def get_breweryname(self):
+        try:
+            return self.cbpi.config.get("BREWERY_NAME", None) or "Brewery"
+        except Exception as e:
+            logger.warning('LCDisplay - Brauerei-Name nicht gefunden: %s', e)
+            return "Brewery"
+
+    # ------------------------------------------------------------------
+    # IP-Adresse ermitteln (wlan0 → eth0 → Fallback-Interface)
+    # ------------------------------------------------------------------
+    async def get_ip_address(self):
+        for interface in ('wlan0', 'eth0', 'enxb827eb488a6e'):
+            ip = self._get_ip(interface)
+            if ip != 'Not connected':
+                return ip
+        return 'Not connected'
+
+    def _get_ip(self, interface):
+        """Liest die IPv4-Adresse des angegebenen Netzwerk-Interfaces aus.
+        Gibt 'Not connected' zurück wenn das Interface nicht verfügbar ist.
+        """
+        so = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            return socket.inet_ntoa(
+                fcntl.ioctl(
+                    so.fileno(),
+                    0x8915,  # SIOCGIFADDR
+                    struct.pack('256s', interface.encode()[:15]),
+                )[20:24]
+            )
+        except OSError:
+            return 'Not connected'
+        finally:
+            so.close()  # Socket immer schließen
+
+    # ------------------------------------------------------------------
+    # Aktiven Brauschritte ermitteln
+    # ------------------------------------------------------------------
+    async def get_active_step_values(self):
+        try:
+            steps = self.cbpi.step.get_state().get('steps', [])
+            for step in steps:
+                if step.get("status") == "A":
+                    return {
+                        'active_step_name':       f"Name: {step['name']}",
+                        'active_step_status':     f"Status: {step['status']}",
+                        'active_step_state_text': f"Status: {step['state_text']}",
+                        'active_step_target_temp':f"Target Temp: {step['props'].get('Temp', '?')}°C",
+                        'active_step_timer_value':f"Timer: {step['props'].get('Timer', '?')}",
+                        'active_step_probs':       step['props'],
+                    }
+            return 'no active step'
+        except Exception as e:
+            logger.warning('LCDisplay - Fehler beim Lesen der Brauschritt-Werte: %s', e)
+            return {
+                'active_step_name':       'error',
+                'active_step_status':     'error',
+                'active_step_state_text': 'Status: ',
+                'active_step_target_temp':'error',
+                'active_step_timer_value':'error',
+                'active_step_probs':      {},
+            }
+
+    # ------------------------------------------------------------------
+    # Kessel-Werte ermitteln
+    # ------------------------------------------------------------------
+    async def get_kettle_values(self, kettle_id):
+        try:
+            kettles = self.cbpi.kettle.get_state().get('data', [])
+            for kettle in kettles:
+                if kettle["id"] == kettle_id:
+                    return {
+                        'kettle_id':         kettle["id"],
+                        'kettle_name':       kettle["name"],
+                        'kettle_heater_id':  kettle["heater"],
+                        'kettle_sensor_id':  kettle["sensor"],
+                        'kettle_target_temp':kettle["target_temp"],
+                    }
+            return f'Kein Kessel mit ID {kettle_id} gefunden'
+        except Exception as e:
+            logger.warning('LCDisplay - Fehler beim Lesen der Kessel-Werte: %s', e)
+            return {
+                'kettle_id':          'error',
+                'kettle_name':        'error',
+                'kettle_heater_id':   'error',
+                'kettle_sensor_id':   'error',
+                'kettle_target_temp': 'error',
+            }
+
+    # ------------------------------------------------------------------
+    # Sensor-Werte anhand der ID ermitteln
+    # ------------------------------------------------------------------
+    async def get_sensor_values_by_id(self, sensor_id):
+        try:
+            sensors = self.cbpi.sensor.get_state().get('data', [])
+            for sensor in sensors:
+                if sensor["id"] == sensor_id:
+                    return {
+                        'sensor_id':    sensor_id,
+                        'sensor_name':  sensor["name"],
+                        'sensor_type':  sensor["type"],
+                        'sensor_value': self.cbpi.sensor.get_sensor_value(sensor_id).get('value'),
+                        'sensor_props': sensor["props"],
+                    }
+            return None
+        except Exception as e:
+            logger.warning('LCDisplay - Fehler beim Lesen der Sensor-Werte: %s', e)
+            return {
+                'sensor_id':    'error',
+                'sensor_name':  'error',
+                'sensor_type':  'error',
+                'sensor_value': 'error',
+                'sensor_props': 'error',
+            }
+
+    # ------------------------------------------------------------------
+    # Umlaute für A00-Zeichensatz ersetzen
+    # ------------------------------------------------------------------
+    def cbidecode(self, string, charmap="A00"):
+        """Ersetzt deutsche Sonderzeichen durch benutzerdefinierte LCD-Zeichen
+        (nur nötig bei A00-Zeichensatz; A02 unterstützt Umlaute nativ)."""
+        if charmap == "A00":
+            return (
+                string
+                .replace("Ä", "\x02")
+                .replace("Ö", "\x03")
+                .replace("Ü", "\x04")
+                .replace("ß", "\x05")
+            )
+        return string
+
+    # ------------------------------------------------------------------
+    # Konfigurationswerte lesen / bei Bedarf anlegen
+    # ------------------------------------------------------------------
+    async def set_lcd_address(self):
+        value = self.cbpi.config.get("LCD_Address", None)
+        if value is None:
+            try:
+                await self.cbpi.config.add(
+                    "LCD_Address", '0x27', ConfigType.STRING,
+                    "LCD-Adresse z.B. 0x27 oder 0x3f – CBPi-Neustart erforderlich",
+                )
+                logger.info('LCDisplay - LCD_Address angelegt (Standard: 0x27)')
+                value = self.cbpi.config.get("LCD_Address", None)
+            except Exception as e:
+                logger.warning('LCDisplay - Konnte LCD_Address nicht anlegen: %s', e)
+        return value
+
+    async def set_lcd_charmap(self):
+        value = self.cbpi.config.get("LCD_Charactermap", None)
+        if value is None:
+            try:
+                await self.cbpi.config.add(
+                    "LCD_Charactermap", 'A00', ConfigType.SELECT,
+                    "LCD-Zeichensatz A00 oder A02 – CBPi-Neustart erforderlich",
+                    [{"label": "A00", "value": "A00"}, {"label": "A02", "value": "A02"}],
+                )
+                logger.info('LCDisplay - LCD_Charactermap angelegt (Standard: A00)')
+                value = self.cbpi.config.get("LCD_Charactermap", None)
+            except Exception as e:
+                logger.warning('LCDisplay - Konnte LCD_Charactermap nicht anlegen: %s', e)
+        return value
+
+    async def set_lcd_refresh(self):
+        value = self.cbpi.config.get('LCD_Refresh', None)
+        if value is None:
+            try:
+                await self.cbpi.config.add(
+                    'LCD_Refresh', 3, ConfigType.SELECT,
+                    'Anzeigedauer pro Kessel in Sekunden – kein CBPi-Neustart nötig',
+                    [{"label": f"{s}s", "value": s} for s in range(1, 7)],
+                )
+                logger.info('LCDisplay - LCD_Refresh angelegt (Standard: 3s)')
+                value = self.cbpi.config.get('LCD_Refresh', None)
+            except Exception as e:
+                logger.warning('LCDisplay - Konnte LCD_Refresh nicht anlegen: %s', e)
+        return value
+
+    async def set_lcd_display_mode(self):
+        value = self.cbpi.config.get('LCD_Display_Mode', None)
+        if value is None:
+            try:
+                await self.cbpi.config.add(
+                    'LCD_Display_Mode', 'Multidisplay', ConfigType.SELECT,
+                    'Anzeigemodus des LCD – kein CBPi-Neustart nötig',
+                    [
+                        {"label": "Multidisplay",  "value": 'Multidisplay'},
+                        {"label": "Singledisplay", "value": 'Singledisplay'},
+                        {"label": "Sensordisplay", "value": 'Sensordisplay'},
+                    ],
+                )
+                logger.info('LCDisplay - LCD_Display_Mode angelegt (Standard: Multidisplay)')
+                value = self.cbpi.config.get('LCD_Display_Mode', None)
+            except Exception as e:
+                logger.warning('LCDisplay - Konnte LCD_Display_Mode nicht anlegen: %s', e)
+        return value
+
+    async def set_lcd_sensortype_for_sensor_mode(self):
+        """Liest den gewählten Sensor aus der Konfig und gibt dessen Typ zurück.
+        Erfordert avollkopfs craftbeerpi4-UI-Fork."""
+        sensor_id = self.cbpi.config.get('LCD_Display_Sensortype', None)
+        if sensor_id is None:
+            try:
+                await self.cbpi.config.add(
+                    'LCD_Display_Sensortype', 'OneWire', ConfigType.SENSOR,
+                    'Sensor auswählen, dessen Typ im Sensordisplay angezeigt wird '
+                    '(nur mit avollkopf-Fork) – kein CBPi-Neustart nötig',
+                )
+                logger.info('LCDisplay - LCD_Display_Sensortype angelegt')
+                sensor_id = self.cbpi.config.get('LCD_Display_Sensortype', None)
+            except Exception as e:
+                logger.warning('LCDisplay - Konnte LCD_Display_Sensortype nicht anlegen: %s', e)
+
+        if sensor_id is not None:
+            sensor_values = await self.get_sensor_values_by_id(sensor_id)
+            if sensor_values:
+                return sensor_values.get("sensor_type")
+        return None
+
+    async def set_lcd_sensortype_for_sensor_mode1(self):
+        """Alternative Methode für Nutzer ohne avollkopf-Fork (Sensor-Typ direkt wählen)."""
+        value = self.cbpi.config.get('LCD_Display_Sensortype', None)
+        if value is None:
+            try:
+                sensor_types = [
+                    "OneWire", "iSpindle", "MQTTSensor", "eManometer",
+                    "phSensorADS1x15", "HTTPSensor", "CustomSensor", "HX711 Load Cell",
+                ]
+                await self.cbpi.config.add(
+                    'LCD_Display_Sensortype', 'OneWire', ConfigType.SELECT,
+                    'Sensor-Typ für das Sensordisplay auswählen – kein CBPi-Neustart nötig',
+                    [{"label": t, "value": t} for t in sensor_types],
+                )
+                logger.info('LCDisplay - LCD_Display_Sensortype angelegt (SELECT-Variante)')
+                value = self.cbpi.config.get('LCD_Display_Sensortype', None)
+            except Exception as e:
+                logger.warning('LCDisplay - Konnte LCD_Display_Sensortype nicht anlegen: %s', e)
+        return value
+
+    async def set_lcd_kettle_for_single_mode(self):
+        value = self.cbpi.config.get('LCD_Singledisplay_Kettle', None)
+        if value is None:
+            try:
+                await self.cbpi.config.add(
+                    'LCD_Singledisplay_Kettle', '', ConfigType.KETTLE,
+                    'Kessel für den Singledisplay-Modus – kein CBPi-Neustart nötig',
+                )
+                logger.info('LCDisplay - LCD_Singledisplay_Kettle angelegt')
+                value = self.cbpi.config.get('LCD_Singledisplay_Kettle', None)
+            except Exception as e:
+                logger.warning('LCDisplay - Konnte LCD_Singledisplay_Kettle nicht anlegen: %s', e)
+        return value
+
+
+def setup(cbpi):
+    cbpi.plugin.register("LCDisplay", LCDisplay)
