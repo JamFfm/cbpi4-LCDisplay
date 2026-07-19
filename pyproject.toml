@@ -1,0 +1,28 @@
+toml[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cbpi4-LCDisplay"
+version = "5.0.9"
+description = "CraftBeerPi4 LCD Plugin"
+readme = "README.md"
+authors = [
+    { name = "Jan Battermann", email = "Jan.Battermann@t-online.de" }
+]
+license = { text = "GPLv3" }
+dependencies = [
+    "smbus2",
+    "RPLCD",
+]
+
+[project.urls]
+Homepage = "https://github.com/JamFfm/cbpi4-LCDisplay"
+
+[tool.setuptools]
+include-package-data = true
+packages = { find = {} }
+
+[tool.setuptools.package-data]
+"*" = ["*.txt", "*.rst", "*.yaml"]
+"cbpi4-LCDisplay" = ["*", "*.txt", "*.rst", "*.yaml"]
